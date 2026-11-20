@@ -110,3 +110,5 @@ dialog .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
 input.t{height:36px;border:1px solid var(--control);border-radius:6px;padding:0 10px;font:inherit;background:#fff}
 .grp{padding:8px 20px;background:var(--ground);font-size:13px;color:var(--muted);border-top:1px solid var(--rule)}
 .nav{flex:none}
+
+input,select{color:var(--text)}
