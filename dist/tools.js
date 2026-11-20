@@ -1,0 +1,211 @@
+// Find, Apps, System, growth, general settings. Shares globals with app.js.
+const dateOf = (sec) => (sec ? new Date(sec * 1000).toLocaleDateString() : '–');
+const driveRoots = () => ['C:\\Users', ...S.drives.map((d) => d.letter + '\\')];
+
+// ---------- growth ----------
+function chartSvg(series) {
+  const W = 600, H = 150, L = 46, R = 10, T = 10, B = 22;
+  const xs = series.map((s) => s[0]), ys = series.map((s) => s[1] / GB);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let lo = Math.floor(Math.min(...ys) - 1), hi = Math.ceil(Math.max(...ys) + 1);
+  if (hi - lo < 4) hi = lo + 4;
+  const X = (t) => L + (W - L - R) * (x1 === x0 ? 1 : (t - x0) / (x1 - x0));
+  const Y = (v) => H - B - (H - B - T) * ((v - lo) / (hi - lo));
+  const ticks = [lo, lo + (hi - lo) / 2, hi];
+  const grid = ticks.map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#e5e5e5" stroke-width="1"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="#6b6b6b">${Math.round(v)}</text>`).join('');
+  const pts = series.map((s) => `${X(s[0]).toFixed(1)},${Y(s[1] / GB).toFixed(1)}`).join(' ');
+  const last = series[series.length - 1];
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Free space on C: over time">${grid}
+    <polyline points="${pts}" fill="none" stroke="#1d5fbf" stroke-width="2"/><circle cx="${X(last[0])}" cy="${Y(last[1] / GB)}" r="3.5" fill="#1d5fbf"/>
+    <text x="${L}" y="${H - 5}" font-size="11" fill="#6b6b6b">${dateOf(x0)}</text><text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" fill="#6b6b6b">${dateOf(x1)}</text></svg>`;
+}
+function growthHtml() {
+  const g = S.growth;
+  if (!g) return '';
+  if (g.series.length < 2) return `<section><h2>Growth</h2><div class="card"><div class="empty">Needs two scans to show what grew. Lighten records one when it opens (every 6 hours) and on each scheduled scan.</div></div></section>`;
+  const rows = g.growers.map((x) => `<div class="row sm2"><div class="n"><b>${esc(x[0])}</b></div><div class="r">+${fmt(x[1])}</div><div class="r mut">${txt(x[2])}</div></div>`).join('') || '<div class="empty">Nothing grew by more than 50 MB.</div>';
+  return `<section class="two"><div><h2>Free space on C: <span>${g.series.length} scans</span></h2><div class="card" style="padding:12px 16px">${chartSvg(g.series)}</div></div>
+    <div><h2>Grew most <span>last ${g.days || 1} day(s), GB</span></h2><div class="card">${rows}</div></div></section>`;
+}
+async function loadGrowth() { try { S.growth = await invoke('growth'); } catch {} if (cur === 'overview') render(); }
+window.afterScan = () => { invoke('snapshot', { force: false }).then(loadGrowth).catch(() => {}); loadGrowth(); };
+
+// ---------- Find ----------
+S.find = { tab: 'large', root: 'C:\\Users', min: 100, days: 90, res: null, busy: false, sel: new Set(), size: new Map(), perm: false, groups: [] };
+const FT = { large: 'Large files', dupes: 'Duplicates', installers: 'Old installers', dev: 'Dev leftovers' };
+function vFind() {
+  const f = S.find;
+  const tabs = Object.entries(FT).map(([k, v]) => `<button class="tab ${f.tab === k ? 'on' : ''}" data-ft="${k}">${v}</button>`).join('');
+  const needsRoot = f.tab !== 'installers', needsMin = f.tab === 'large' || f.tab === 'dupes', needsDays = f.tab === 'installers' || f.tab === 'dev';
+  const roots = driveRoots().map((r) => `<option value="${esc(r)}">`).join('');
+  const bar = `<div class="bar2">${needsRoot ? `<input class="t" id="f_root" list="roots" value="${esc(f.root)}" style="width:300px" aria-label="Folder to scan"><datalist id="roots">${roots}</datalist>` : ''}
+    ${needsMin ? `<select id="f_min" aria-label="Minimum size">${[10, 100, 500, 1000].map((m) => `<option value="${m}" ${f.min === m ? 'selected' : ''}>Over ${m >= 1000 ? '1 GB' : m + ' MB'}</option>`).join('')}</select>` : ''}
+    ${needsDays ? `<select id="f_days" aria-label="Older than">${[30, 60, 90, 180, 365].map((d) => `<option value="${d}" ${f.days === d ? 'selected' : ''}>${f.tab === 'dev' ? 'Idle' : 'Older than'} ${d} days</option>`).join('')}</select>` : ''}
+    <button class="btn pri" data-fa="run" ${f.busy ? 'disabled' : ''}>${f.busy ? 'Scanning…' : 'Scan'}</button></div>`;
+  const note = { large: 'The biggest files in the folder. App data is included; Windows and Program Files are skipped.', dupes: 'Identical files, matched by content hash. The oldest copy in each set is kept unless you change it.', installers: 'iso, msi, msix and exe files in Downloads, plus iso/msi/msix on the Desktop and in Documents.', dev: 'node_modules, Rust target and Python venv folders in projects you have not touched. They are rebuilt by npm, cargo or pip.' }[f.tab];
+  let body = '';
+  if (f.res === null) body = `<div class="card"><div class="empty">${f.busy ? 'Scanning, this can take a minute…' : 'Choose options and press Scan.'}</div></div>`;
+  else if (!f.res.length) body = '<div class="card"><div class="empty">Nothing found.</div></div>';
+  else if (f.tab === 'dupes') {
+    body = `<div class="card">${f.res.map((g, gi) => `<div class="grp">${g.files.length} copies · ${txt(g.bytes)} each · ${txt(g.bytes * (g.files.length - 1))} wasted</div>${g.files.map((h) => fileRow(h)).join('')}`).join('')}</div>`;
+  } else if (f.tab === 'dev') {
+    body = `<div class="card">${f.res.map((h) => `<div class="row" style="grid-template-columns:24px 1fr 110px 100px 90px"><input type="checkbox" data-fp="${esc(h.path)}" ${f.sel.has(h.path) ? 'checked' : ''}><div class="n"><b>${esc(h.project)}</b><small>${esc(h.kind)} · ${esc(h.path)}</small></div><div class="r mut">idle ${h.idle_days} d</div><div class="r">${fmt(h.bytes)}</div><div class="r"><button class="btn sm line" data-fa="reveal" data-p="${esc(h.path)}">Show</button></div></div>`).join('')}</div>`;
+  } else body = `<div class="card">${f.res.map((h) => fileRow(h)).join('')}</div>`;
+  const sb = [...f.sel].reduce((a, p) => a + (f.size.get(p) || 0), 0);
+  const act = f.tab === 'dev' ? 'Delete folders' : f.perm ? 'Delete permanently' : 'Move to Recycle Bin';
+  return `<div class="wrap">${head('Find files', note)}<div class="tabs">${tabs}</div>${bar}${body}</div>
+    <div class="bottom"><div class="wrap"><span>Selected <b>${f.sel.size}</b> · <b>${txt(sb)}</b>${f.tab !== 'dev' ? ` <label style="margin-left:16px"><input type="checkbox" id="f_perm" ${f.perm ? 'checked' : ''}> Delete permanently</label>` : ''}</span><button class="btn pri" data-fa="do" ${f.sel.size ? '' : 'disabled'}>${act}</button></div></div>`;
+}
+function fileRow(h) {
+  const f = S.find;
+  return `<div class="row" style="grid-template-columns:24px 1fr 100px 110px 70px"><input type="checkbox" data-fp="${esc(h.path)}" ${f.sel.has(h.path) ? 'checked' : ''}><div class="n"><b>${esc(h.name)}</b><small title="${esc(h.path)}">${esc(h.path)}</small></div><div class="r mut">${dateOf(h.modified)}</div><div class="r">${fmt(h.bytes)}</div><div class="r"><button class="btn sm line" data-fa="reveal" data-p="${esc(h.path)}">Show</button></div></div>`;
+}
+async function findRun() {
+  const f = S.find;
+  f.root = $('#f_root')?.value ?? f.root; f.min = +($('#f_min')?.value ?? f.min); f.days = +($('#f_days')?.value ?? f.days);
+  f.busy = true; f.res = null; f.sel = new Set(); f.size = new Map(); render();
+  try {
+    if (f.tab === 'large') f.res = await invoke('find_large', { root: f.root, minMb: f.min });
+    else if (f.tab === 'dupes') f.res = await invoke('find_dupes', { root: f.root, minMb: f.min });
+    else if (f.tab === 'installers') f.res = await invoke('find_installers', { days: f.days });
+    else f.res = await invoke('find_dev', { root: f.root, days: f.days });
+    const flat = f.tab === 'dupes' ? f.res.flatMap((g) => g.files) : f.res;
+    flat.forEach((h) => f.size.set(h.path, h.bytes));
+    if (f.tab === 'installers') flat.forEach((h) => f.sel.add(h.path));
+    if (f.tab === 'dev') flat.forEach((h) => f.sel.add(h.path));
+    if (f.tab === 'dupes') f.res.forEach((g) => g.files.slice(1).forEach((h) => f.sel.add(h.path)));
+  } catch (e) { toast(String(e), true); f.res = []; }
+  f.busy = false; render();
+}
+function findDo() {
+  const f = S.find, paths = [...f.sel], sb = paths.reduce((a, p) => a + (f.size.get(p) || 0), 0);
+  const dev = f.tab === 'dev', perm = dev || f.perm;
+  openDlg(`<h3>${dev ? 'Delete' : perm ? 'Permanently delete' : 'Move to Recycle Bin'} ${paths.length} item(s), ${txt(sb)}?</h3>
+    <ul>${paths.slice(0, 6).map((p) => `<li style="word-break:break-all">${esc(p)}</li>`).join('')}${paths.length > 6 ? `<li>and ${paths.length - 6} more</li>` : ''}</ul>
+    ${perm ? `<div class="problems">${dev ? 'These are rebuilt by your package manager, but deleting cannot be undone.' : 'Permanent. This cannot be undone.'}</div>` : '<p class="mut">You can restore them from the Recycle Bin. Space is freed when it is emptied.</p>'}
+    <div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">${dev ? 'Delete' : perm ? 'Delete permanently' : 'Move to Recycle Bin'}</button></div>`);
+  $('#go').onclick = async () => {
+    $('#go').disabled = true; $('#go').textContent = 'Working…';
+    try {
+      const r = dev ? await invoke('delete_dev', { paths }) : await invoke('trash_files', { paths, permanent: perm });
+      dlg.close();
+      toast(`${r.done} done${r.failed ? `, ${r.failed} skipped` : ''}${dev || perm ? `, freed ${txt(r.freed)}` : ', in the Recycle Bin'}`);
+      await refreshDrives(); await findRun();
+    } catch (e) { dlg.close(); toast(String(e), true); }
+  };
+}
+
+// ---------- Apps ----------
+S.apps = null; S.appq = '';
+function vApps() {
+  const q = S.appq.toLowerCase();
+  const list = (S.apps || []).filter((a) => !q || (a.name + a.publisher).toLowerCase().includes(q)).sort((a, b) => b.bytes - a.bytes);
+  const rows = list.map((a) => `<div class="row" style="grid-template-columns:1fr 90px 90px 100px 170px"><div class="n"><b>${esc(a.name)}</b><small title="${esc(a.location)}">${esc(a.publisher || '–')}${a.location ? ' · ' + esc(a.location) : ''}</small></div><div class="mut">${esc(a.version)}</div><div class="r">${a.bytes ? fmt(a.bytes) : dash}</div><div class="r mut">${a.last_used ? dateOf(a.last_used) : '–'}</div>
+    <div class="r">${a.movable ? `<button class="btn sm line" data-ap="move" data-p="${esc(a.location)}">Move…</button> ` : ''}<button class="btn sm line" data-ap="uninstall" data-id="${esc(a.id)}">Uninstall</button></div></div>`).join('') || `<div class="empty">${S.apps ? 'No apps match.' : ''}</div>`;
+  return `<div class="wrap">${head('Installed apps', 'Sorted by size. "Last used" comes from Windows Prefetch and may be blank.', `<input class="t" id="a_q" placeholder="Search" value="${esc(S.appq)}" style="width:220px;height:36px;border:1px solid var(--control);border-radius:6px;padding:0 10px;font:inherit">`)}
+    <div class="card"><div class="row h" style="grid-template-columns:1fr 90px 90px 100px 170px"><span>App</span><span>Version</span><span class="r">Size</span><span class="r">Last used</span><span></span></div>${S.apps ? rows : skeleton()}</div>
+    <p class="note">Move works for apps directly inside Program Files or your profile. Apps with a running service, or Microsoft system components, are refused.</p></div>`;
+}
+
+// ---------- System ----------
+S.sys = null;
+function sysRow(title, sub, btns) { return `<div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>${title}</b><small style="white-space:normal">${sub}</small></div><div class="r" style="display:flex;gap:8px">${btns || ''}</div></div>`; }
+function vSystem() {
+  const s = S.sys;
+  if (!s) return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.')}${skeleton()}</div>`;
+  const b = (t, label, a = '') => `<button class="btn sm line" data-sa="${t}" ${a}>${label}</button>`;
+  const wo = s.windows_old ? sysRow(`Windows.old <span class="u">${txt(s.windows_old)}</span>`, 'Your previous Windows. Removing it means you cannot roll back to that version. Windows deletes it itself after about 10 days.', b('winold', 'Remove…')) : sysRow('Windows.old', 'Not present.', '');
+  const hib = sysRow(`Hibernation file <span class="u">${s.hiber ? txt(s.hiber) : 'off'}</span>`, 'Turning hibernation off frees this file and also disables Fast Startup.', s.hiber ? b('hiber_off', 'Turn off…') : b('hiber_on', 'Turn on'));
+  const pf = sysRow('Page file', s.pagefile.length ? s.pagefile.map(esc).join('<br>') : 'System managed. Shrinking it is not recommended, so Lighten only reports it.', '');
+  const dk = s.docker ? sysRow('Docker', s.docker.map(esc).join('<br>') || 'No data', b('docker_prune', 'Prune unused') + b('docker_prune_all', 'Prune all unused…')) : sysRow('Docker', 'Not installed or not running.', '');
+  const vh = s.vhdx.length ? s.vhdx.map((v) => sysRow(`Virtual disk <span class="u">${txt(v.bytes)}</span>`, esc(v.path), b('wsl_compact', 'Compact…', `data-p="${esc(v.path)}"`))).join('') : sysRow('WSL and Docker disks', 'None found.', '');
+  const rp = sysRow('Restore point', 'Create a Windows restore point now. Windows allows one every 24 hours, and System Protection must be on.', b('restore_point', 'Create'));
+  return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.', `<button class="btn line" data-sa="refresh">Refresh</button>`)}<div class="card">${wo}${hib}${pf}${dk}${vh}${rp}</div></div>`;
+}
+const SYS_WARN = {
+  winold: 'Permanently deletes C:\\Windows.old. You will not be able to go back to the previous Windows version.',
+  hiber_off: 'Hibernation and Fast Startup will stop working until you turn it back on.',
+  docker_prune_all: 'Removes every image not used by a container, not only dangling ones. They are downloaded again when needed.',
+  wsl_compact: 'Shuts down WSL and every running distro, then compacts the disk. Save your work first.',
+};
+async function sysRun(task, arg) {
+  const go = async () => {
+    openDlg(`<h3>Working…</h3><p class="mut">This can take a few minutes. Keep Lighten open.</p>`); dlg.dataset.lock = '1';
+    try { const out = await invoke('system_task', { task, arg: arg || null }); delete dlg.dataset.lock; openDlg(`<h3>Done</h3><div class="path" style="white-space:pre-wrap">${esc(out || 'Finished')}</div><div class="foot"><button class="btn pri" data-close>Close</button></div>`); }
+    catch (e) { delete dlg.dataset.lock; openDlg(`<h3>Failed</h3><div class="problems">${esc(e)}</div><div class="foot"><button class="btn pri" data-close>Close</button></div>`); }
+    await refreshDrives(); S.sys = await invoke('system_info'); render();
+  };
+  if (!SYS_WARN[task]) return go();
+  openDlg(`<h3>Are you sure?</h3><div class="problems">${esc(SYS_WARN[task])}</div><div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">Continue</button></div>`);
+  $('#go').onclick = go;
+}
+
+// ---------- settings: general ----------
+S.inst = null;
+function generalHtml() {
+  const s = S.settings, i = S.inst;
+  return `<section style="margin-top:0"><h2>General</h2><div class="card">
+    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Keep running in the tray when closed</b><small>Needed for nothing else; scheduled scans use Task Scheduler.</small></div><input type="checkbox" id="s_tray" ${s.tray_on_close ? 'checked' : ''}></div>
+    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Dry-run report</b><small>Writes what a clean would remove to a text file on your Desktop. Deletes nothing.</small></div><button class="btn sm line" data-ta="report">Export</button></div>
+    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>${i?.installed ? 'Installed in Program Files' : 'Run from this location'}</b><small>${i?.installed ? 'Uninstall removes the schedule, shortcut and settings. Folders you moved stay linked.' : 'Install adds a Start menu entry and an Apps entry, and moves the schedule to the installed copy.'}</small></div>${i?.installed ? '<button class="btn sm line" data-ta="uninstall">Uninstall…</button>' : '<button class="btn sm line" data-ta="install">Install…</button>'}</div></div></section>
+    <section><h2>Updates <span>${i?.signing ? 'Signed updates required' : 'Signing key not built in: hash check only'}</span></h2></section>`;
+}
+window.hooks = {};
+window.onGo = async (v) => {
+  if (v === 'overview') loadGrowth();
+  if (v === 'apps' && !S.apps) { S.apps = null; render(); try { S.apps = await invoke('apps_list'); } catch (e) { toast(String(e), true); S.apps = []; } }
+  if (v === 'system') { S.sys = null; render(); try { S.sys = await invoke('system_info'); } catch (e) { toast(String(e), true); } }
+  if (v === 'settings') { try { S.inst = await invoke('install_state'); } catch {} }
+  if (v === 'clean' && S.cleanDrive !== 'C:' && !S.dcats) loadDCats();
+};
+Object.assign(views, { find: vFind, apps: vApps, system: vSystem });
+
+// ---------- events ----------
+document.addEventListener('click', async (e) => {
+  const t = e.target.closest('[data-ft]');
+  if (t) { Object.assign(S.find, { tab: t.dataset.ft, res: null, sel: new Set(), size: new Map(), root: t.dataset.ft === 'dev' && S.find.root === 'C:\\Users' ? (S.drives.find((d) => d.letter !== 'C:')?.letter + '\\' || 'C:\\Users') : S.find.root }); return render(); }
+  const fa = e.target.closest('[data-fa]');
+  if (fa) {
+    const k = fa.dataset.fa;
+    if (k === 'run') return findRun();
+    if (k === 'do') return findDo();
+    if (k === 'reveal') return invoke('reveal_file', { path: fa.dataset.p });
+  }
+  const ap = e.target.closest('[data-ap]');
+  if (ap) {
+    if (ap.dataset.ap === 'move') return doMove(ap.dataset.p);
+    const app = (S.apps || []).find((x) => x.id === ap.dataset.id);
+    openDlg(`<h3>Uninstall ${esc(app?.name)}?</h3><p class="mut">This opens the app's own uninstaller.</p><div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">Open uninstaller</button></div>`);
+    $('#go').onclick = async () => { try { await invoke('uninstall_app', { id: ap.dataset.id }); dlg.close(); toast('Uninstaller opened'); } catch (er) { toast(String(er), true); } };
+    return;
+  }
+  const sa = e.target.closest('[data-sa]');
+  if (sa) { if (sa.dataset.sa === 'refresh') { S.sys = null; render(); S.sys = await invoke('system_info'); return render(); } return sysRun(sa.dataset.sa, sa.dataset.p); }
+  const ta = e.target.closest('[data-ta]');
+  if (ta) {
+    const k = ta.dataset.ta;
+    if (k === 'report') { try { const p = await invoke('export_report'); toast('Saved ' + p); invoke('reveal_file', { path: p }); } catch (er) { toast(String(er), true); } return; }
+    if (k === 'install') { try { await invoke('install_app'); } catch (er) { toast(String(er), true); } return; }
+    if (k === 'uninstall') {
+      openDlg(`<h3>Uninstall Lighten?</h3><p class="mut">Removes the schedule, shortcut, settings and program files. Folders already moved stay linked and keep working.</p><div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">Uninstall</button></div>`);
+      $('#go').onclick = async () => { try { await invoke('uninstall_self'); } catch (er) { toast(String(er), true); } };
+    }
+  }
+});
+document.addEventListener('change', (e) => {
+  const id = e.target.id;
+  if (e.target.dataset.fp !== undefined) {
+    const f = S.find, p = e.target.dataset.fp;
+    if (e.target.checked) {
+      if (f.tab === 'dupes') {
+        const g = f.res.find((x) => x.files.some((h) => h.path === p));
+        if (g && g.files.filter((h) => h.path !== p).every((h) => f.sel.has(h.path))) { e.target.checked = false; return toast('Keep at least one copy', true); }
+      }
+      f.sel.add(p);
+    } else f.sel.delete(p);
+    return render();
+  }
+  if (id === 'f_perm') { S.find.perm = e.target.checked; render(); }
+  if (id === 'cdrv') { setCleanDrive(e.target.value); }
+});
+document.addEventListener('input', (e) => { if (e.target.id === 'a_q') { S.appq = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#a_q'); el.focus(); el.setSelectionRange(pos, pos); } });

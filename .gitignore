@@ -1,0 +1,5 @@
+target
+keys/update.key
+*.bak
+build.log
+*error.txt
