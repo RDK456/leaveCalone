@@ -1,0 +1,24 @@
+[package]
+name = "lighten"
+version = "0.0.1"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-ico"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.33"
+ureq = "2"
+sha2 = "0.10"
+qbsdiff = "1.4"
+ed25519-dalek = "2"
+getrandom = "0.2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
