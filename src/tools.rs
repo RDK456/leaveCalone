@@ -574,6 +574,11 @@ pub struct Growth {
     series: Vec<(u64, u64)>,
     growers: Vec<(String, i64, u64)>,
     days: u64,
+    /// Free space lost since its highest reading in the last 14 days, and when that was
+    pub(crate) drop: u64,
+    since: u64,
+    /// Part of the drop that the tracked folders do not explain
+    unexplained: u64,
 }
 #[tauri::command]
 pub fn growth() -> Growth {
@@ -581,7 +586,14 @@ pub fn growth() -> Growth {
     let series = h.iter().map(|s| (s.when, s.c_free)).collect();
     let mut growers = vec![];
     let mut days = 0;
+    let (mut drop, mut since, mut unexplained) = (0, 0, 0);
     if let Some(last) = h.last() {
+        if let Some(peak) = h.iter().filter(|s| s.when < last.when && last.when - s.when <= 14 * 86400).max_by_key(|s| s.c_free) {
+            drop = peak.c_free.saturating_sub(last.c_free);
+            since = peak.when;
+            let grew: u64 = last.sizes.iter().map(|(k, v)| v.saturating_sub(*peak.sizes.get(k).unwrap_or(v))).sum();
+            unexplained = drop.saturating_sub(grew);
+        }
         let base = h.iter().find(|s| last.when.saturating_sub(s.when) <= 10 * 86400 && s.when < last.when).or(h.first().filter(|s| s.when < last.when));
         if let Some(b) = base {
             days = (last.when - b.when) / 86400;
@@ -595,7 +607,7 @@ pub fn growth() -> Growth {
             growers.truncate(8);
         }
     }
-    Growth { series, growers, days }
+    Growth { series, growers, days, drop, since, unexplained }
 }
 
 // ---------- report ----------

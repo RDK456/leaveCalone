@@ -856,6 +856,10 @@ fn headless(force_clean: bool) {
     let v = serde_json::json!({ "when": now(), "cleanable": cleanable, "freed": freed, "auto_clean": st.auto_clean, "c_free": c_free });
     let _ = fs::write(lighten_dir().join("last-scan.json"), v.to_string());
     tools::record_snapshot(false);
+    let drop = tools::growth().drop;
+    if drop > 10 << 30 {
+        tools::toast("Free space on C: dropped", &format!("{:.0} GB less free than a few days ago. Open Lighten to see why.", drop as f64 / 1073741824.0));
+    }
     if cleanable > 500 * 1024 * 1024 || freed > 0 {
         let msg = if freed > 0 { format!("Cleaned {:.1} GB. C: has {:.0} GB free.", freed as f64 / 1073741824.0, c_free as f64 / 1073741824.0) } else { format!("{:.1} GB can be cleaned. Open Lighten to review.", cleanable as f64 / 1073741824.0) };
         tools::toast("Lighten scan finished", &msg);
@@ -1067,7 +1071,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![drives, scan_clean, clean, list_dir, move_candidates, plan_move, move_folder, moved_list, move_back, admin_task, open_in_explorer, find_links, adopt_link, get_settings, save_settings, last_scan, app_info, check_update, apply_update,
             tools::find_large, tools::find_dupes, tools::find_installers, tools::trash_files, tools::find_dev, tools::delete_dev, tools::reveal_file, tools::system_info, tools::system_task, tools::apps_list, tools::uninstall_app, tools::snapshot, tools::growth, tools::export_report, tools::install_state, tools::install_app, tools::uninstall_self,
-            extra::disk_scan, extra::fast_dir, extra::disk_release, extra::onedrive_scan, extra::onedrive_free, extra::trash_log, extra::restore_trashed, extra::find_empty, extra::delete_empty, extra::find_shortcuts, extra::find_similar, extra::startup_list, extra::startup_set, extra::winsxs_analyze, extra::set_exclusions, extra::profile_dir])
+            extra::disk_scan, extra::fast_dir, extra::disk_release, extra::onedrive_scan, extra::onedrive_free, extra::trash_log, extra::restore_trashed, extra::find_empty, extra::delete_empty, extra::find_shortcuts, extra::find_similar, extra::startup_list, extra::startup_set, extra::winsxs_analyze, extra::set_exclusions, extra::profile_dir, extra::hidden_space, extra::schedule_chkdsk])
         .run(tauri::generate_context!())
         .expect("failed to start Lighten");
 }

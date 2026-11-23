@@ -89,6 +89,9 @@ See everything you moved, its status, and restore it. Track free space over time
 - Tray icon, close-to-tray
 - Light and dark theme
 - An exclusion list: folders that finders and Move never touch
+- Free-space drop alert: a banner and notification when C: loses 10 GB or more, with what grew
+- Hidden-space check: Fast scan flags large files the disk lists but Windows cannot find, with a one-click disk check (`chkdsk /f`) scheduled for the next restart
+- Every setting has a plain-language explanation
 - Command line: `Lighten.exe --scan`, `--clean`, `--version`, `--help` (output shows when launched from an elevated terminal)
 - Signed delta updater (ed25519 + SHA-256, small binary patches)
 

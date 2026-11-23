@@ -19,9 +19,20 @@ function chartSvg(series) {
     <polyline points="${pts}" fill="none" style="stroke:var(--hue)" stroke-width="2"/><circle cx="${X(last[0])}" cy="${Y(last[1] / GB)}" r="3.5" style="fill:var(--hue)"/>
     <text x="${L}" y="${H - 5}" font-size="11" style="fill:var(--muted)">${dateOf(x0)}</text><text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" style="fill:var(--muted)">${dateOf(x1)}</text></svg>`;
 }
+function dropBanner(g) {
+  if (!g.drop || g.drop < 10 * 2 ** 30) return '';
+  const why = g.unexplained > g.drop / 2
+    ? `The folders Lighten tracks explain only ${txt(g.drop - g.unexplained)} of it. <button class="link" data-v="explore">Run Fast scan in Explore</button> to find the rest, including files Windows hides.`
+    : 'The "Grew most" list shows where it went.';
+  return `<div class="alert"><b>Free space on C: fell by ${txt(g.drop)}</b> since ${dateOf(g.since)}. ${why}</div>`;
+}
 function growthHtml() {
   const g = S.growth;
   if (!g) return '';
+  const banner = dropBanner(g);
+  return banner + growthBody(g);
+}
+function growthBody(g) {
   if (g.series.length < 2) return `<section><h2>Growth</h2><div class="card"><div class="empty">Needs two scans to show what grew. Lighten records one when it opens (every 6 hours) and on each scheduled scan.</div></div></section>`;
   const rows = g.growers.map((x) => `<div class="row sm2"><div class="n"><b>${esc(x[0])}</b></div><div class="r">+${fmt(x[1])}</div><div class="r mut">${txt(x[2])}</div></div>`).join('') || '<div class="empty">Nothing grew by more than 50 MB.</div>';
   return `<section class="two"><div><h2>Free space on C: <span>${g.series.length} scans</span></h2><div class="card" style="padding:12px 16px">${chartSvg(g.series)}</div></div>
@@ -80,9 +91,9 @@ S.inst = null;
 function generalHtml() {
   const s = S.settings, i = S.inst;
   return `<section style="margin-top:0"><h2>General</h2><div class="card">
-    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Keep running in the tray when closed</b><small>Needed for nothing else; scheduled scans use Task Scheduler.</small></div><input type="checkbox" id="s_tray" ${s.tray_on_close ? 'checked' : ''}></div>
-    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Dry-run report</b><small>Writes what a clean would remove to a text file on your Desktop. Deletes nothing.</small></div><button class="btn sm line" data-ta="report">Export</button></div>
-    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>${i?.installed ? 'Installed in Program Files' : 'Run from this location'}</b><small>${i?.installed ? 'Uninstall removes the schedule, shortcut and settings. Folders you moved stay linked.' : 'Install adds a Start menu entry and an Apps entry, and moves the schedule to the installed copy.'}</small></div>${i?.installed ? '<button class="btn sm line" data-ta="uninstall">Uninstall…</button>' : '<button class="btn sm line" data-ta="install">Install…</button>'}</div></div></section>
+    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Keep running in the tray when closed</b><small style="white-space:normal">Closing the window hides Lighten in the notification area instead of quitting, so it opens instantly. Scheduled scans do not need this; they run through Task Scheduler either way.</small></div><input type="checkbox" id="s_tray" ${s.tray_on_close ? 'checked' : ''}></div>
+    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Dry-run report</b><small style="white-space:normal">Saves a text file on your Desktop listing every file a clean would remove, with sizes. Nothing is deleted, so it is a safe way to see what the default clean does first.</small></div><button class="btn sm line" data-ta="report">Export</button></div>
+    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>${i?.installed ? 'Installed in Program Files' : 'Run from this location'}</b><small>${i?.installed ? 'Uninstall removes the schedule, shortcut, settings and program files. Folders you moved stay linked and keep working.' : 'Install copies Lighten to Program Files, adds a Start menu entry and an Apps entry, and points the schedule at that copy. Needs administrator rights. Without it Lighten runs from where you put it.'}</small></div>${i?.installed ? '<button class="btn sm line" data-ta="uninstall">Uninstall…</button>' : '<button class="btn sm line" data-ta="install">Install…</button>'}</div></div></section>
     ${exclHtml()}`;
 }
 window.hooks = {};

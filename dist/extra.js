@@ -62,6 +62,7 @@ document.addEventListener('click', async (e) => {
       delete dlg.dataset.lock; dlg.close();
       S.fast = d.toUpperCase();
       toast(`${r.files.toLocaleString()} files in ${r.secs}s, ${txt(r.bytes)} used`);
+      S.hidden = null; invoke('hidden_space').then((h) => { S.hidden = h; if (cur === 'explore') render(); }).catch(() => {});
       loadExplore(d + '\\');
     } catch (er) { delete dlg.dataset.lock; openDlg(`<h3>Fast scan unavailable</h3><div class="problems">${esc(er)}</div><p class="mut">Open the drive normally to scan it folder by folder.</p><div class="foot"><button class="btn pri" data-close>Close</button></div>`); }
   }
@@ -109,7 +110,8 @@ document.addEventListener('click', async (e) => {
 function exclHtml() {
   const l = (S.settings && S.settings.exclusions) || [];
   const rows = l.map((p, i) => `<div class="row" style="grid-template-columns:1fr auto"><div class="n"><b style="font-weight:400">${esc(p)}</b></div><button class="btn sm line" data-x="del" data-i="${i}">Remove</button></div>`).join('');
-  return `<section><h2>Never touch these <span>Finders and Move skip these folders</span></h2><div class="card">${rows || '<div class="empty">No exclusions.</div>'}
+  return `<section><h2>Never touch these <span>Finders, Clean and Move skip these folders</span></h2><div class="card">${rows || '<div class="empty">No exclusions.</div>'}
+    <div class="row" style="grid-template-columns:1fr"><div class="n"><small style="white-space:normal">Add a folder here and Lighten will not list it, delete from it, clean it or move it, including everything inside. Use it for projects, game saves or anything you want left alone. Matching is by whole folder name, so C:\\Work does not cover C:\\Workshop.</small></div></div>
     <div class="excl"><input class="t" id="x_in" placeholder="C:\\Users\\you\\Projects" aria-label="Folder to exclude"><button class="btn line" data-x="add">Add</button></div></div></section>`;
 }
 document.addEventListener('click', async (e) => {
@@ -121,4 +123,28 @@ document.addEventListener('click', async (e) => {
   else next.splice(+x.dataset.i, 1);
   try { S.settings.exclusions = await invoke('set_exclusions', { list: next }); } catch (er) { toast(String(er), true); }
   render();
+});
+
+// ---------- hidden space: files Windows lists as missing but that still use the disk ----------
+S.hidden = null;
+function hiddenHtml() {
+  const h = S.hidden;
+  if (!h || !h.length) return '';
+  const tot = h.reduce((a, x) => a + x.bytes, 0);
+  const list = h.slice(0, 5).map((x) => `<div><code>${esc(x.path)}</code> · ${txt(x.bytes)}</div>`).join('');
+  return `<div class="alert"><b>${txt(tot)} is used by ${h.length} file(s) Windows cannot find.</b> The disk's file table lists them, but opening them by name fails, so no folder shows them and Explorer cannot delete them.
+    <div style="margin:8px 0">${list}</div>
+    A disk check at the next restart can reattach them to a <code>found.000</code> folder, where you can delete them. <button class="btn sm line" data-a="chkdsk" data-p="${esc(S.fast || 'C:')}">Schedule disk check…</button></div>`;
+}
+document.addEventListener('click', async (e) => {
+  const a = e.target.closest('[data-a="chkdsk"]');
+  if (!a) return;
+  const d = a.dataset.p;
+  openDlg(`<h3>Check ${esc(d)} at next restart?</h3><p class="mut">Windows will run <code>chkdsk ${esc(d)} /f</code> before it starts. It repairs file-system errors and can take from a few minutes to an hour on large drives; the PC is unusable until it finishes. Files it recovers go to <code>${esc(d)}\found.000</code>. Nothing is deleted without you.</p>
+    <div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">Schedule</button></div>`);
+  $('#go').onclick = async () => {
+    $('#go').disabled = true;
+    try { const r = await invoke('schedule_chkdsk', { drive: d }); dlg.close(); toast(/next time|restart/i.test(r) ? 'Scheduled. Restart to run it.' : r || 'Scheduled'); }
+    catch (er) { dlg.close(); toast(String(er), true); }
+  };
 });

@@ -120,7 +120,7 @@ function vExplore() {
   const p = S.exp;
   if (!p) {
     const rows = S.drives.map((d) => `<div class="row sm2" style="grid-template-columns:1fr 120px 90px 120px"><div class="n"><button class="link" data-open="${esc(d.letter + '\\')}">${esc(d.letter)} ${esc(d.label || 'Local disk')}</button></div><div class="r">${txt(d.total - d.free)} used</div><div class="r">${txt(d.free)} free</div><div class="r"><button class="btn sm line" data-a="fastscan" data-p="${esc(d.letter)}" title="Reads the NTFS file table. Seconds instead of minutes.">Fast scan</button></div></div>`).join('');
-    return `<div class="wrap">${head('Explore', 'Pick a drive and drill into the folders using the most space. Fast scan reads the NTFS file table and is the quickest way to see a whole drive.')}<div class="card">${rows}</div></div>`;
+    return `<div class="wrap">${head('Explore', 'Pick a drive and drill into the folders using the most space. Fast scan reads the NTFS file table and is the quickest way to see a whole drive. It also flags large files Windows cannot find.')}${hiddenHtml()}<div class="card">${rows}</div></div>`;
   }
   const parent = p.replace(/\\+$/, '').split('\\').slice(0, -1).join('\\');
   const up = p.replace(/\\+$/, '').match(/^[A-Za-z]:$/) ? '' : (parent.match(/^[A-Za-z]:$/) ? parent + '\\' : parent);
@@ -134,7 +134,7 @@ function vExplore() {
       <div class="r">${e.is_dir && inProf && !e.link && S.moveDrive ? `<button class="btn sm line" data-a="move" data-p="${esc(e.path)}">Move…</button>` : ''}</div></div>`;
   }).join('') || `<div class="empty">${items ? 'Empty or no access.' : ''}</div>`;
   return `<div class="wrap">${head('Explore', `<code>${esc(p)}</code>`, `<button class="btn line" data-open="${esc(up)}">${up ? 'Up' : 'Drives'}</button><button class="btn line" data-a="reveal" data-p="${esc(p)}">Open in Explorer</button><button class="btn line" data-a="expmode">${S.expMode === 'map' ? 'List' : 'Treemap'}</button>`)}
-    ${S.expMode === 'map' && items ? treemapHtml(items) : ''}<div class="card" ${S.expMode === 'map' && items ? 'hidden' : ''}><div class="row ex h"><span>Name</span><span>Share</span><span class="r">Size</span><span class="r">Files</span><span></span></div>${items ? rows : skeleton()}</div></div>`;
+    ${hiddenHtml()}${S.expMode === 'map' && items ? treemapHtml(items) : ''}<div class="card" ${S.expMode === 'map' && items ? 'hidden' : ''}><div class="row ex h"><span>Name</span><span>Share</span><span class="r">Size</span><span class="r">Files</span><span></span></div>${items ? rows : skeleton()}</div></div>`;
 }
 
 function vMoved() {
@@ -161,12 +161,12 @@ function vSettings() {
   return `<div class="wrap">${head('Settings', `Lighten ${esc(i?.version || '')}`)}
     ${generalHtml()}
     <section><h2>Scheduled scan <span>${lastTxt}</span></h2><div class="card">
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Scan in the background</b><small>Uses Windows Task Scheduler, runs elevated, no window.</small></div><input type="checkbox" id="s_auto" ${s.auto_scan ? 'checked' : ''}></div>
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Repeat every</b><small>Days between scans (1 to 30)</small></div><input id="s_days" type="number" min="1" max="30" value="${s.every_days || 7}" style="${inp};width:70px"></div>
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Also clean the safe set</b><small>Only the default-checked items. Never the Recycle Bin or browsers.</small></div><input type="checkbox" id="s_clean" ${s.auto_clean ? 'checked' : ''}></div></div>
-      <p class="note"><button class="btn pri" data-a="savesettings">Save schedule</button></p></section>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Scan in the background</b><small style="white-space:normal">Creates a Windows Task Scheduler job that runs Lighten with administrator rights and no window, even when the app is closed. Each run measures what is cleanable, saves a free-space reading for the Overview chart, and shows a notification when a lot can be cleaned or free space drops sharply. Turn it off to remove the job.</small></div><input type="checkbox" id="s_auto" ${s.auto_scan ? 'checked' : ''}></div>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Repeat every</b><small style="white-space:normal">Days between scans, 1 to 30. More frequent scans give the growth chart and the sudden-drop alert finer detail; each scan takes under a minute.</small></div><input id="s_days" type="number" min="1" max="30" value="${s.every_days || 7}" style="${inp};width:70px"></div>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Also clean the safe set</b><small style="white-space:normal">After each scan, delete the items that are ticked by default on the Clean page (temp files, shader caches, logs and similar that apps rebuild). It never empties the Recycle Bin, never touches browser data or the opt-in items, and skips anything in use or on your exclusion list. Off means scan and notify only.</small></div><input type="checkbox" id="s_clean" ${s.auto_clean ? 'checked' : ''}></div></div>
+      <p class="note"><button class="btn pri" data-a="savesettings">Save schedule</button> Applies the three settings above. Nothing changes until you press Save.</p></section>
     <section><h2>Updates <span>${updMsg || (S.inst?.signing ? 'Signed updates required' : 'Signing key not built in: hash check only')}</span></h2><div class="card">
-      <div class="row" style="grid-template-columns:1fr"><div class="n"><b>Update manifest URL</b><small style="white-space:normal">An https link to a JSON file. Downloads are checked against its SHA-256; a delta patch is used when one exists for your version.</small></div></div>
+      <div class="row" style="grid-template-columns:1fr"><div class="n"><b>Update manifest URL</b><small style="white-space:normal">An https link to a small JSON file that names the newest version. Lighten only accepts it if it is signed with the key built into this copy, and checks the download against its SHA-256. When a patch exists for your version only the difference is downloaded. Leave empty to turn updates off; nothing is ever checked in the background.</small></div></div>
       <div class="row" style="grid-template-columns:1fr"><input id="s_url" value="${esc(s.update_url)}" placeholder="https://example.com/lighten/manifest.json" style="${inp};min-width:0;width:100%"></div></div>
       <p class="note"><button class="btn line" data-a="checkupd">Check for updates</button> ${u && u.available ? '<button class="btn pri" data-a="applyupd">Install update</button>' : ''}</p></section></div>`;
 }

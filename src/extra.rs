@@ -875,3 +875,52 @@ pub async fn winsxs_analyze() -> Result<Vec<(String, String)>, String> {
 #[cfg(test)]
 #[path = "extra_tests.rs"]
 mod tests;
+
+// ---------- hidden space: files the file table lists but Windows cannot find ----------
+#[derive(Serialize)]
+pub struct Hidden {
+    path: String,
+    bytes: u64,
+}
+/// Big files that exist in the NTFS table but report "not found" when opened by path.
+/// They hold real space (free space shrinks) yet no folder listing shows them.
+fn find_hidden(m: &Mft) -> Vec<Hidden> {
+    let mut v = vec![];
+    for (i, e) in m.ents.iter().enumerate() {
+        let Some(e) = e else { continue };
+        if e.dir || e.size < 200 << 20 {
+            continue;
+        }
+        let Some(p) = path_of(m, i) else { continue };
+        if p[3..].starts_with('$') {
+            continue; // $MFT, $LogFile and friends are not reachable by name
+        }
+        // PermissionDenied (WindowsApps and the like) is a file we merely cannot read; only NotFound is hidden
+        if matches!(fs::symlink_metadata(&p), Err(x) if x.kind() == std::io::ErrorKind::NotFound) {
+            v.push(Hidden { path: p, bytes: e.size });
+        }
+    }
+    v.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    v.truncate(20);
+    v
+}
+#[tauri::command]
+pub async fn hidden_space() -> Result<Vec<Hidden>, String> {
+    blocking(|| -> Result<Vec<Hidden>, String> {
+        let g = MFT.lock().unwrap();
+        Ok(find_hidden(g.as_ref().ok_or("Run the fast scan first")?))
+    })
+    .await?
+}
+
+/// Schedules a full check of the drive for the next restart; it can reattach lost files to a found.000 folder.
+#[tauri::command]
+pub async fn schedule_chkdsk(drive: String) -> Result<String, String> {
+    blocking(move || -> Result<String, String> {
+        let l = drive_letter(&drive).ok_or("Unknown drive")?;
+        let o = Command::new("cmd").args(["/c", &format!("echo Y| chkdsk {l}: /f")]).creation_flags(NO_WINDOW).output().map_err(|e| e.to_string())?;
+        let s = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+        Ok(tail(s.trim(), 400))
+    })
+    .await?
+}

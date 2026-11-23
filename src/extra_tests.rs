@@ -235,3 +235,27 @@ fn mft_gap() {
     }
     fs::write(std::env::temp_dir().join("lighten-gap.txt"), out).unwrap();
 }
+
+#[test]
+fn hidden_files_are_found() {
+    let ent = |parent: u32, name: &str, size: u64, dir: bool| Some(Box::new(Ent { parent, name: name.into(), size, mtime: 0, attrs: 0, dir }));
+    let mut ents: Vec<Option<Box<Ent>>> = (0..10).map(|_| None).collect();
+    ents[5] = ent(5, ".", 0, true);
+    ents[6] = ent(5, "Windows", 0, true);
+    ents[7] = ent(6, "explorer.exe", 300 << 20, false); // real file, big
+    ents[8] = ent(6, "lighten-no-such-file.bin", 400 << 20, false); // listed but not on disk
+    ents[9] = ent(6, "lighten-small-ghost.bin", 1 << 20, false); // too small to matter
+    let m = Mft { letter: 'C', ents, tot: vec![(0, 0); 10], kids: HashMap::new(), when: 0, stats: [0; 5] };
+    let h = find_hidden(&m);
+    assert_eq!(h.len(), 1);
+    assert!(h[0].path.ends_with("lighten-no-such-file.bin") && h[0].bytes == 400 << 20);
+}
+
+#[test]
+#[ignore]
+fn hidden_live() {
+    let m = build_mft('C').unwrap();
+    let h = find_hidden(&m);
+    let out: String = h.iter().map(|x| format!("{} {}\n", x.bytes, x.path)).collect();
+    fs::write(std::env::temp_dir().join("lighten-hidden.txt"), format!("{} hidden\n{out}", h.len())).unwrap();
+}
