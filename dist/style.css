@@ -5,7 +5,7 @@
   --pill-pos-bg:#dcfae5; --pill-pos-ink:#04250e; --pill-neg-bg:#ffedea; --pill-neg-ink:#831c1e;
   --pill-warn-bg:#fffbeb; --pill-warn-ink:#92400e; --pill-neu-bg:#eee; --pill-neu-ink:#3d3d3d;
   --r-card:8px; --r-ctl:6px; --gap:12px; --pad:24px; --ctl:36px;
-  --font:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --on-accent:#fff; --hover:#e3e3e3; --font:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
 }
 *{box-sizing:border-box;margin:0}
 html,body{height:100%}
@@ -27,9 +27,9 @@ h1{font-size:24px;font-weight:700;line-height:1.2}
 .sub b{color:var(--text);font-weight:500}
 .acts{display:flex;gap:8px;flex:none}
 .btn{height:var(--ctl);padding:0 14px;border-radius:var(--r-ctl);border:1px solid transparent;background:var(--raised);font-weight:500}
-.btn:hover{background:#e3e3e3}
-.btn.pri{background:var(--accent);color:#fff}
-.btn.pri:hover{background:#2b2b2b}
+.btn:hover{background:var(--hover)}
+.btn.pri{background:var(--accent);color:var(--on-accent)}
+.btn.pri:hover{opacity:.88;background:var(--accent)}
 .btn.line{background:none;border-color:var(--control)}
 .btn.sm{height:30px;padding:0 10px;font-size:13px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
@@ -82,8 +82,8 @@ select{height:var(--ctl);border:1px solid var(--control);border-radius:var(--r-c
 .bottom .wrap{display:flex;justify-content:space-between;align-items:center}
 .note{margin-top:10px;color:var(--muted);font-size:13px}
 #toast{position:fixed;right:24px;top:20px;display:grid;gap:8px;z-index:5}
-.t{background:var(--accent);color:#fff;padding:10px 14px;border-radius:var(--r-ctl);max-width:420px}
-.t.bad{background:var(--negative)}
+.t{background:var(--accent);color:var(--on-accent);padding:10px 14px;border-radius:var(--r-ctl);max-width:420px}
+.t.bad{background:#c4242a;color:#fff}
 dialog{border:1px solid var(--border);border-radius:var(--r-card);padding:24px;width:min(560px,92vw);margin:auto;background:var(--surface);color:var(--text)}
 dialog::backdrop{background:rgba(10,10,10,.35)}
 dialog h3{font-size:18px;font-weight:500;margin-bottom:12px}
@@ -103,12 +103,30 @@ dialog .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
 }
 @media (prefers-reduced-motion:no-preference){.btn,.nav{transition:background-color .12s}}
 
-.tabs{display:flex;gap:22px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.tabs{display:flex;flex-wrap:wrap;column-gap:22px;border-bottom:1px solid var(--border);margin-bottom:16px}
 .tab{background:none;border:0;padding:8px 0;color:var(--muted);border-bottom:2px solid transparent;font-weight:500;margin-bottom:-1px}
 .tab.on{color:var(--text);border-color:var(--text)}
 .bar2{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
-input.t{height:36px;border:1px solid var(--control);border-radius:6px;padding:0 10px;font:inherit;background:#fff}
+input.t{height:36px;border:1px solid var(--control);border-radius:6px;padding:0 10px;font:inherit;background:var(--surface)}
 .grp{padding:8px 20px;background:var(--ground);font-size:13px;color:var(--muted);border-top:1px solid var(--rule)}
 .nav{flex:none}
 
 input,select{color:var(--text)}
+
+:root[data-theme=dark]{
+  color-scheme:dark;
+  --ground:#101113; --surface:#18191c; --raised:#232529; --border:#2b2d32; --rule:#222428; --control:#3b3e44;
+  --text:#ededee; --muted:#9b9ea5; --accent:#ededee; --on-accent:#0a0a0a; --hue:#5b9bff; --hover:#2d2f34;
+  --positive:#5fbf6a; --negative:#ff6b6f; --warning:#e0a96d;
+  --pill-pos-bg:#12351d; --pill-pos-ink:#b6f0c4; --pill-neg-bg:#3d1618; --pill-neg-ink:#ffc1c3;
+  --pill-warn-bg:#3a2d10; --pill-warn-ink:#f3d9a0; --pill-neu-bg:#2a2c31; --pill-neu-ink:#c9cbd0;
+}
+.mark rect.a{fill:var(--raised)}.mark rect.b{fill:var(--hue)}
+.tm{position:relative;height:min(62vh,560px);background:var(--ground);border:1px solid var(--border);border-radius:var(--r-card);overflow:hidden}
+.tmc{position:absolute;overflow:hidden;padding:8px 10px;border:0;margin:0;text-align:left;font:inherit;color:var(--text);box-shadow:inset 0 0 0 2px var(--ground);background:color-mix(in srgb,var(--hue) calc(6% + var(--s) * 44%),var(--surface))}
+button.tmc:hover{box-shadow:inset 0 0 0 2px var(--hue)}
+.tmc b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tmc span.mut{font-size:12px;display:block}
+.tmc.rest{background:var(--raised);cursor:default;color:var(--muted)}
+.excl{display:flex;gap:8px;padding:10px 20px;border-top:1px solid var(--rule)}
+.excl input{flex:1;min-width:0}

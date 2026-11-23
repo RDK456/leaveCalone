@@ -1,6 +1,6 @@
 [package]
 name = "lighten"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 
 [build-dependencies]
@@ -16,6 +16,7 @@ sha2 = "0.10"
 qbsdiff = "1.4"
 ed25519-dalek = "2"
 getrandom = "0.2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
 
 [profile.release]
 opt-level = "s"

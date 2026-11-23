@@ -10,6 +10,8 @@ A fast, no-nonsense Windows disk cleaner. Finds junk, big files, duplicates and 
 
 ![Overview](docs/screenshots/overview.png)
 
+![Dark theme](docs/screenshots/dark.png)
+
 </div>
 
 > Screenshots use sample data.
@@ -24,7 +26,7 @@ A fast, no-nonsense Windows disk cleaner. Finds junk, big files, duplicates and 
 ## Features
 
 ### Clean
-17 categories: temp files, shader caches, npm/pip/NuGet/Cargo caches, Chrome/Edge/Brave/Discord caches, Windows Update cache, Delivery Optimization, crash dumps, NVIDIA installers, logs and the Recycle Bin. Running apps are detected and skipped.
+22 categories: temp files, shader caches, npm/pip/NuGet/Cargo/Yarn/Gradle caches, Chrome/Edge/Brave/Discord/Slack/VS Code caches, thumbnail cache, Windows Update cache, Delivery Optimization, crash dumps, NVIDIA installers, logs and the Recycle Bin. Running apps are detected and skipped.
 
 ![Clean](docs/screenshots/clean.png)
 
@@ -40,15 +42,31 @@ Move AppData folders, profile folders and Program Files apps to D: (or any drive
 
 ![Move](docs/screenshots/move.png)
 
-### Find big, duplicate and old files
-- **Large files** across any drive
-- **Duplicates** matched by size, partial hash, then full SHA-256
-- **Old installers** (`.exe`, `.msi`, `.iso`) in Downloads
-- **Dev leftovers** like idle `node_modules` and Rust `target` folders
+### Find anything wasting space
+Nine finders in one place:
+
+- **Large files**: reads the NTFS file table directly, so a whole drive takes seconds
+- **Duplicates**: matched by size, partial hash, then full SHA-256
+- **Similar photos**: resized or re-saved copies, matched by a visual fingerprint
+- **Installers**: old `.exe`, `.msi`, `.iso` in Downloads
+- **Dev leftovers**: idle `node_modules`, Rust `target` and Python venv folders
+- **Empty folders**: only folders with nothing inside, nothing pre-selected
+- **Broken shortcuts**: Desktop and Start menu links whose target is gone
+- **OneDrive**: free up space on files that stay in the cloud
+- **Undo**: restore anything Lighten sent to the Recycle Bin
 
 Deletes go to the **Recycle Bin first**. Permanent delete is opt-in.
 
 ![Find](docs/screenshots/find.png)
+
+![Similar photos](docs/screenshots/photos.png)
+
+![OneDrive](docs/screenshots/onedrive.png)
+
+### Explore with a treemap
+Fast scan reads the NTFS file table, then every folder opens instantly. Switch between a list and a treemap where bigger tiles use more space.
+
+![Explore](docs/screenshots/explore.png)
 
 ### Apps
 Installed apps with size and last-used date. Uninstall, or move a large app to another drive.
@@ -56,7 +74,7 @@ Installed apps with size and last-used date. Uninstall, or move a large app to a
 ![Apps](docs/screenshots/apps.png)
 
 ### System
-Windows.old, hibernation file, pagefile info, Docker prune, WSL/Docker disk compaction, and a restore point before big cleans.
+Windows.old, hibernation file, pagefile info, Docker prune, WSL/Docker disk compaction, a restore point before big cleans, a real-size report of the WinSxS component store, and your startup apps with one-click on/off.
 
 ![System](docs/screenshots/system.png)
 
@@ -69,6 +87,9 @@ See everything you moved, its status, and restore it. Track free space over time
 - Scheduled background scan via Task Scheduler, with a toast notification
 - Optional auto-clean of the safe set only
 - Tray icon, close-to-tray
+- Light and dark theme
+- An exclusion list: folders that finders and Move never touch
+- Command line: `Lighten.exe --scan`, `--clean`, `--version`, `--help` (output shows when launched from an elevated terminal)
 - Signed delta updater (ed25519 + SHA-256, small binary patches)
 
 ![Settings](docs/screenshots/settings.png)
@@ -80,6 +101,10 @@ See everything you moved, its status, and restore it. Track free space over time
 - System, Microsoft and other protected folders are on a deny list and can't be moved.
 - Reparse points are never followed during scans or deletes.
 - Running processes and services that use a folder block its move.
+- Excluded folders are skipped by every finder and by Move.
+- Recycle Bin deletes are logged, so Undo can put them back.
+- OneDrive "free up space" only touches synced placeholders; files not yet uploaded are refused.
+- Empty folders are only removed if they are still empty at that moment.
 - Moves are journaled in `%LOCALAPPDATA%\Lighten\moves.json`.
 
 ## Install
@@ -101,6 +126,10 @@ cargo build --release
 
 The UI is plain HTML/CSS/JS in `dist/`. No bundler.
 
+Tests: `cargo test` (set `__COMPAT_LAYER=RunAsInvoker` to run the test binary without an elevation prompt). The live NTFS check needs an elevated terminal: `cargo test mft_live -- --ignored`.
+
+Code signing and a winget package are documented in [docs/SIGNING.md](docs/SIGNING.md) and [winget/make-manifest.ps1](winget/make-manifest.ps1).
+
 ### Updater and signing
 
 Updates are verified with an ed25519 signature over `"<version>\n<sha256>"`. The public key is `update.pub`. The private key is never stored in this repo.
@@ -113,4 +142,4 @@ lighten.exe --sign key.txt 0.0.2 <sha256> sig.txt
 
 ## Status
 
-v0.0.1, early. Tested: scanning, delta patching, signing, and the UI. Real deletes, restore points, install and updater restart need more testing on varied machines. Back up what matters and use the dry-run report first.
+v0.1.0, early. Tested: scanning, delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, and the UI. Real deletes, restore points, install and updater restart need more testing on varied machines. Back up what matters and use the dry-run report first.

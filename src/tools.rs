@@ -9,28 +9,29 @@ use std::sync::Mutex;
 
 // ---------- offered-path allowlist: deletes only act on paths a finder just showed ----------
 static OFFERED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
-fn offer(paths: impl IntoIterator<Item = String>) {
+pub(crate) fn offer(paths: impl IntoIterator<Item = String>) {
     let mut g = OFFERED.lock().unwrap();
     let s = g.get_or_insert_with(HashSet::new);
     for p in paths {
         s.insert(lc(Path::new(&p)));
     }
 }
-fn offered(p: &str) -> bool {
+pub(crate) fn offered(p: &str) -> bool {
     OFFERED.lock().unwrap().as_ref().map(|s| s.contains(&lc(Path::new(p)))).unwrap_or(false)
 }
-fn protected(p: &Path) -> bool {
+pub(crate) fn protected(p: &Path) -> bool {
     let l = lc(p);
     [envp("SystemRoot"), envp("ProgramFiles"), envp("ProgramFiles(x86)"), envp("ProgramData")]
         .iter()
         .any(|b| !lc(b).is_empty() && (l == lc(b) || l.starts_with(&(lc(b) + "\\"))))
+        || super::extra::excluded(p)
         || l.contains("\\$recycle.bin")
         || l.contains("\\system volume information")
 }
-fn mtime(md: &fs::Metadata) -> u64 {
+pub(crate) fn mtime(md: &fs::Metadata) -> u64 {
     md.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0)
 }
-fn run_ps(script: &str) -> Result<String, String> {
+pub(crate) fn run_ps(script: &str) -> Result<String, String> {
     let dir = lighten_dir();
     let f = dir.join(format!("run-{}.ps1", now()));
     fs::write(&f, format!("[Console]::OutputEncoding=[Text.Encoding]::UTF8\r\n{script}\r\n")).map_err(|e| e.to_string())?;
@@ -46,21 +47,21 @@ fn run_ps(script: &str) -> Result<String, String> {
     s.push_str(&String::from_utf8_lossy(&o.stderr));
     Ok(s.trim().to_string())
 }
-fn tail(s: &str, n: usize) -> String {
+pub(crate) fn tail(s: &str, n: usize) -> String {
     let c: Vec<char> = s.chars().collect();
     c[c.len().saturating_sub(n)..].iter().collect()
 }
 
 // ---------- file walking ----------
 const SKIP: &[&str] = &["windows", "$recycle.bin", "system volume information", "program files", "program files (x86)", "programdata", "recovery", "perflogs", "windowsapps", "msocache", ".git", "node_modules"];
-fn walk_files(root: &Path, appdata: bool, f: &mut dyn FnMut(&Path, &fs::Metadata)) {
+pub(crate) fn walk_files(root: &Path, appdata: bool, f: &mut dyn FnMut(&Path, &fs::Metadata)) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(d) = stack.pop() {
         let Ok(rd) = fs::read_dir(&d) else { continue };
         for e in rd.flatten() {
             let p = e.path();
             let Ok(md) = fs::symlink_metadata(&p) else { continue };
-            if is_reparse(&md) {
+            if is_reparse(&md) || super::extra::excluded(&p) {
                 continue;
             }
             if md.is_dir() {
@@ -75,7 +76,7 @@ fn walk_files(root: &Path, appdata: bool, f: &mut dyn FnMut(&Path, &fs::Metadata
         }
     }
 }
-fn root_ok(root: &str) -> Result<PathBuf, String> {
+pub(crate) fn root_ok(root: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(root.trim());
     if !p.is_absolute() || !p.is_dir() {
         return Err("Pick an existing folder".into());
@@ -85,12 +86,12 @@ fn root_ok(root: &str) -> Result<PathBuf, String> {
 
 #[derive(Serialize, Clone)]
 pub struct FileHit {
-    path: String,
-    name: String,
-    bytes: u64,
-    modified: u64,
+    pub(crate) path: String,
+    pub(crate) name: String,
+    pub(crate) bytes: u64,
+    pub(crate) modified: u64,
 }
-fn hit(p: &Path, md: &fs::Metadata) -> FileHit {
+pub(crate) fn hit(p: &Path, md: &fs::Metadata) -> FileHit {
     FileHit { path: p.to_string_lossy().into(), name: p.file_name().map(|n| n.to_string_lossy().into()).unwrap_or_default(), bytes: md.len(), modified: mtime(md) }
 }
 
@@ -99,11 +100,15 @@ pub async fn find_large(root: String, min_mb: u64) -> Result<Vec<FileHit>, Strin
     blocking(move || -> Result<Vec<FileHit>, String> {
         let root = root_ok(&root)?;
         let min = min_mb.max(1) * 1024 * 1024;
-        let mut v = vec![];
-        walk_files(&root, true, &mut |p, md| {
-            if md.len() >= min {
-                v.push(hit(p, md));
-            }
+        // NTFS master-file-table read when possible (seconds instead of minutes); otherwise walk.
+        let mut v = super::extra::mft_big(&root, min).unwrap_or_else(|| {
+            let mut v = vec![];
+            walk_files(&root, true, &mut |p, md| {
+                if md.len() >= min {
+                    v.push(hit(p, md));
+                }
+            });
+            v
         });
         v.sort_by(|a, b| b.bytes.cmp(&a.bytes));
         v.truncate(200);
@@ -131,8 +136,8 @@ fn hash_file(p: &Path, limit: Option<usize>) -> Option<String> {
 }
 #[derive(Serialize)]
 pub struct DupGroup {
-    bytes: u64,
-    files: Vec<FileHit>,
+    pub(crate) bytes: u64,
+    pub(crate) files: Vec<FileHit>,
 }
 #[tauri::command]
 pub async fn find_dupes(root: String, min_mb: u64) -> Result<Vec<DupGroup>, String> {
@@ -236,14 +241,17 @@ pub async fn trash_files(paths: Vec<String>, permanent: bool) -> Result<TrashRes
             );
             let out = run_ps(&script)?;
             let _ = fs::remove_file(&list);
+            let mut logged = vec![];
             for ((p, len), line) in ok.iter().zip(out.lines().map(|l| l.trim())) {
                 if line == "ok" && !p.exists() {
                     freed += len;
                     done += 1;
+                    logged.push((p.to_string_lossy().to_string(), *len));
                 } else {
                     failed += 1;
                 }
             }
+            super::extra::log_trash(&logged); // feeds the Undo list
         }
         Ok(TrashResult { freed, done, failed, recycled: !permanent })
     })
@@ -270,7 +278,7 @@ pub async fn find_dev(root: String, days: u64) -> Result<Vec<DevHit>, String> {
             for e in rd.flatten() {
                 let p = e.path();
                 let Ok(md) = fs::symlink_metadata(&p) else { continue };
-                if !md.is_dir() || is_reparse(&md) {
+                if !md.is_dir() || is_reparse(&md) || super::extra::excluded(&p) {
                     continue;
                 }
                 let n = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -344,7 +352,7 @@ pub fn reveal_file(path: String) {
 }
 
 // ---------- system ----------
-fn find_ext(root: &Path, ext: &str, depth: u32, out: &mut Vec<PathBuf>) {
+pub(crate) fn find_ext(root: &Path, ext: &str, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(root) else { return };
     for e in rd.flatten() {
         let p = e.path();

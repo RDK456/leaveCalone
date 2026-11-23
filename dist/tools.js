@@ -12,12 +12,12 @@ function chartSvg(series) {
   const X = (t) => L + (W - L - R) * (x1 === x0 ? 1 : (t - x0) / (x1 - x0));
   const Y = (v) => H - B - (H - B - T) * ((v - lo) / (hi - lo));
   const ticks = [lo, lo + (hi - lo) / 2, hi];
-  const grid = ticks.map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#e5e5e5" stroke-width="1"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="#6b6b6b">${Math.round(v)}</text>`).join('');
+  const grid = ticks.map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" style="stroke:var(--border)" stroke-width="1"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" style="fill:var(--muted)">${Math.round(v)}</text>`).join('');
   const pts = series.map((s) => `${X(s[0]).toFixed(1)},${Y(s[1] / GB).toFixed(1)}`).join(' ');
   const last = series[series.length - 1];
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Free space on C: over time">${grid}
-    <polyline points="${pts}" fill="none" stroke="#1d5fbf" stroke-width="2"/><circle cx="${X(last[0])}" cy="${Y(last[1] / GB)}" r="3.5" fill="#1d5fbf"/>
-    <text x="${L}" y="${H - 5}" font-size="11" fill="#6b6b6b">${dateOf(x0)}</text><text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" fill="#6b6b6b">${dateOf(x1)}</text></svg>`;
+    <polyline points="${pts}" fill="none" style="stroke:var(--hue)" stroke-width="2"/><circle cx="${X(last[0])}" cy="${Y(last[1] / GB)}" r="3.5" style="fill:var(--hue)"/>
+    <text x="${L}" y="${H - 5}" font-size="11" style="fill:var(--muted)">${dateOf(x0)}</text><text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" style="fill:var(--muted)">${dateOf(x1)}</text></svg>`;
 }
 function growthHtml() {
   const g = S.growth;
@@ -29,71 +29,6 @@ function growthHtml() {
 }
 async function loadGrowth() { try { S.growth = await invoke('growth'); } catch {} if (cur === 'overview') render(); }
 window.afterScan = () => { invoke('snapshot', { force: false }).then(loadGrowth).catch(() => {}); loadGrowth(); };
-
-// ---------- Find ----------
-S.find = { tab: 'large', root: 'C:\\Users', min: 100, days: 90, res: null, busy: false, sel: new Set(), size: new Map(), perm: false, groups: [] };
-const FT = { large: 'Large files', dupes: 'Duplicates', installers: 'Old installers', dev: 'Dev leftovers' };
-function vFind() {
-  const f = S.find;
-  const tabs = Object.entries(FT).map(([k, v]) => `<button class="tab ${f.tab === k ? 'on' : ''}" data-ft="${k}">${v}</button>`).join('');
-  const needsRoot = f.tab !== 'installers', needsMin = f.tab === 'large' || f.tab === 'dupes', needsDays = f.tab === 'installers' || f.tab === 'dev';
-  const roots = driveRoots().map((r) => `<option value="${esc(r)}">`).join('');
-  const bar = `<div class="bar2">${needsRoot ? `<input class="t" id="f_root" list="roots" value="${esc(f.root)}" style="width:300px" aria-label="Folder to scan"><datalist id="roots">${roots}</datalist>` : ''}
-    ${needsMin ? `<select id="f_min" aria-label="Minimum size">${[10, 100, 500, 1000].map((m) => `<option value="${m}" ${f.min === m ? 'selected' : ''}>Over ${m >= 1000 ? '1 GB' : m + ' MB'}</option>`).join('')}</select>` : ''}
-    ${needsDays ? `<select id="f_days" aria-label="Older than">${[30, 60, 90, 180, 365].map((d) => `<option value="${d}" ${f.days === d ? 'selected' : ''}>${f.tab === 'dev' ? 'Idle' : 'Older than'} ${d} days</option>`).join('')}</select>` : ''}
-    <button class="btn pri" data-fa="run" ${f.busy ? 'disabled' : ''}>${f.busy ? 'Scanning…' : 'Scan'}</button></div>`;
-  const note = { large: 'The biggest files in the folder. App data is included; Windows and Program Files are skipped.', dupes: 'Identical files, matched by content hash. The oldest copy in each set is kept unless you change it.', installers: 'iso, msi, msix and exe files in Downloads, plus iso/msi/msix on the Desktop and in Documents.', dev: 'node_modules, Rust target and Python venv folders in projects you have not touched. They are rebuilt by npm, cargo or pip.' }[f.tab];
-  let body = '';
-  if (f.res === null) body = `<div class="card"><div class="empty">${f.busy ? 'Scanning, this can take a minute…' : 'Choose options and press Scan.'}</div></div>`;
-  else if (!f.res.length) body = '<div class="card"><div class="empty">Nothing found.</div></div>';
-  else if (f.tab === 'dupes') {
-    body = `<div class="card">${f.res.map((g, gi) => `<div class="grp">${g.files.length} copies · ${txt(g.bytes)} each · ${txt(g.bytes * (g.files.length - 1))} wasted</div>${g.files.map((h) => fileRow(h)).join('')}`).join('')}</div>`;
-  } else if (f.tab === 'dev') {
-    body = `<div class="card">${f.res.map((h) => `<div class="row" style="grid-template-columns:24px 1fr 110px 100px 90px"><input type="checkbox" data-fp="${esc(h.path)}" ${f.sel.has(h.path) ? 'checked' : ''}><div class="n"><b>${esc(h.project)}</b><small>${esc(h.kind)} · ${esc(h.path)}</small></div><div class="r mut">idle ${h.idle_days} d</div><div class="r">${fmt(h.bytes)}</div><div class="r"><button class="btn sm line" data-fa="reveal" data-p="${esc(h.path)}">Show</button></div></div>`).join('')}</div>`;
-  } else body = `<div class="card">${f.res.map((h) => fileRow(h)).join('')}</div>`;
-  const sb = [...f.sel].reduce((a, p) => a + (f.size.get(p) || 0), 0);
-  const act = f.tab === 'dev' ? 'Delete folders' : f.perm ? 'Delete permanently' : 'Move to Recycle Bin';
-  return `<div class="wrap">${head('Find files', note)}<div class="tabs">${tabs}</div>${bar}${body}</div>
-    <div class="bottom"><div class="wrap"><span>Selected <b>${f.sel.size}</b> · <b>${txt(sb)}</b>${f.tab !== 'dev' ? ` <label style="margin-left:16px"><input type="checkbox" id="f_perm" ${f.perm ? 'checked' : ''}> Delete permanently</label>` : ''}</span><button class="btn pri" data-fa="do" ${f.sel.size ? '' : 'disabled'}>${act}</button></div></div>`;
-}
-function fileRow(h) {
-  const f = S.find;
-  return `<div class="row" style="grid-template-columns:24px 1fr 100px 110px 70px"><input type="checkbox" data-fp="${esc(h.path)}" ${f.sel.has(h.path) ? 'checked' : ''}><div class="n"><b>${esc(h.name)}</b><small title="${esc(h.path)}">${esc(h.path)}</small></div><div class="r mut">${dateOf(h.modified)}</div><div class="r">${fmt(h.bytes)}</div><div class="r"><button class="btn sm line" data-fa="reveal" data-p="${esc(h.path)}">Show</button></div></div>`;
-}
-async function findRun() {
-  const f = S.find;
-  f.root = $('#f_root')?.value ?? f.root; f.min = +($('#f_min')?.value ?? f.min); f.days = +($('#f_days')?.value ?? f.days);
-  f.busy = true; f.res = null; f.sel = new Set(); f.size = new Map(); render();
-  try {
-    if (f.tab === 'large') f.res = await invoke('find_large', { root: f.root, minMb: f.min });
-    else if (f.tab === 'dupes') f.res = await invoke('find_dupes', { root: f.root, minMb: f.min });
-    else if (f.tab === 'installers') f.res = await invoke('find_installers', { days: f.days });
-    else f.res = await invoke('find_dev', { root: f.root, days: f.days });
-    const flat = f.tab === 'dupes' ? f.res.flatMap((g) => g.files) : f.res;
-    flat.forEach((h) => f.size.set(h.path, h.bytes));
-    if (f.tab === 'installers') flat.forEach((h) => f.sel.add(h.path));
-    if (f.tab === 'dev') flat.forEach((h) => f.sel.add(h.path));
-    if (f.tab === 'dupes') f.res.forEach((g) => g.files.slice(1).forEach((h) => f.sel.add(h.path)));
-  } catch (e) { toast(String(e), true); f.res = []; }
-  f.busy = false; render();
-}
-function findDo() {
-  const f = S.find, paths = [...f.sel], sb = paths.reduce((a, p) => a + (f.size.get(p) || 0), 0);
-  const dev = f.tab === 'dev', perm = dev || f.perm;
-  openDlg(`<h3>${dev ? 'Delete' : perm ? 'Permanently delete' : 'Move to Recycle Bin'} ${paths.length} item(s), ${txt(sb)}?</h3>
-    <ul>${paths.slice(0, 6).map((p) => `<li style="word-break:break-all">${esc(p)}</li>`).join('')}${paths.length > 6 ? `<li>and ${paths.length - 6} more</li>` : ''}</ul>
-    ${perm ? `<div class="problems">${dev ? 'These are rebuilt by your package manager, but deleting cannot be undone.' : 'Permanent. This cannot be undone.'}</div>` : '<p class="mut">You can restore them from the Recycle Bin. Space is freed when it is emptied.</p>'}
-    <div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">${dev ? 'Delete' : perm ? 'Delete permanently' : 'Move to Recycle Bin'}</button></div>`);
-  $('#go').onclick = async () => {
-    $('#go').disabled = true; $('#go').textContent = 'Working…';
-    try {
-      const r = dev ? await invoke('delete_dev', { paths }) : await invoke('trash_files', { paths, permanent: perm });
-      dlg.close();
-      toast(`${r.done} done${r.failed ? `, ${r.failed} skipped` : ''}${dev || perm ? `, freed ${txt(r.freed)}` : ', in the Recycle Bin'}`);
-      await refreshDrives(); await findRun();
-    } catch (e) { dlg.close(); toast(String(e), true); }
-  };
-}
 
 // ---------- Apps ----------
 S.apps = null; S.appq = '';
@@ -120,7 +55,7 @@ function vSystem() {
   const dk = s.docker ? sysRow('Docker', s.docker.map(esc).join('<br>') || 'No data', b('docker_prune', 'Prune unused') + b('docker_prune_all', 'Prune all unused…')) : sysRow('Docker', 'Not installed or not running.', '');
   const vh = s.vhdx.length ? s.vhdx.map((v) => sysRow(`Virtual disk <span class="u">${txt(v.bytes)}</span>`, esc(v.path), b('wsl_compact', 'Compact…', `data-p="${esc(v.path)}"`))).join('') : sysRow('WSL and Docker disks', 'None found.', '');
   const rp = sysRow('Restore point', 'Create a Windows restore point now. Windows allows one every 24 hours, and System Protection must be on.', b('restore_point', 'Create'));
-  return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.', `<button class="btn line" data-sa="refresh">Refresh</button>`)}<div class="card">${wo}${hib}${pf}${dk}${vh}${rp}</div></div>`;
+  return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.', `<button class="btn line" data-sa="refresh">Refresh</button>`)}<div class="card">${wo}${hib}${pf}${dk}${vh}${winsxsRow()}${rp}</div>${startupHtml()}</div>`;
 }
 const SYS_WARN = {
   winold: 'Permanently deletes C:\\Windows.old. You will not be able to go back to the previous Windows version.',
@@ -148,13 +83,15 @@ function generalHtml() {
     <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Keep running in the tray when closed</b><small>Needed for nothing else; scheduled scans use Task Scheduler.</small></div><input type="checkbox" id="s_tray" ${s.tray_on_close ? 'checked' : ''}></div>
     <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Dry-run report</b><small>Writes what a clean would remove to a text file on your Desktop. Deletes nothing.</small></div><button class="btn sm line" data-ta="report">Export</button></div>
     <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>${i?.installed ? 'Installed in Program Files' : 'Run from this location'}</b><small>${i?.installed ? 'Uninstall removes the schedule, shortcut and settings. Folders you moved stay linked.' : 'Install adds a Start menu entry and an Apps entry, and moves the schedule to the installed copy.'}</small></div>${i?.installed ? '<button class="btn sm line" data-ta="uninstall">Uninstall…</button>' : '<button class="btn sm line" data-ta="install">Install…</button>'}</div></div></section>
-    <section><h2>Updates <span>${i?.signing ? 'Signed updates required' : 'Signing key not built in: hash check only'}</span></h2></section>`;
+    ${exclHtml()}`;
 }
 window.hooks = {};
 window.onGo = async (v) => {
   if (v === 'overview') loadGrowth();
   if (v === 'apps' && !S.apps) { S.apps = null; render(); try { S.apps = await invoke('apps_list'); } catch (e) { toast(String(e), true); S.apps = []; } }
-  if (v === 'system') { S.sys = null; render(); try { S.sys = await invoke('system_info'); } catch (e) { toast(String(e), true); } }
+  if (v === 'system') { S.sys = null; S.startup = null; render(); loadStartup(); try { S.sys = await invoke('system_info'); } catch (e) { toast(String(e), true); } }
+  if (v === 'find' && !S.profile) { try { S.profile = await invoke('profile_dir'); } catch {} }
+  if (v !== 'explore' && S.fast) { S.fast = null; invoke('disk_release').catch(() => {}); }
   if (v === 'settings') { try { S.inst = await invoke('install_state'); } catch {} }
   if (v === 'clean' && S.cleanDrive !== 'C:' && !S.dcats) loadDCats();
 };
@@ -163,12 +100,13 @@ Object.assign(views, { find: vFind, apps: vApps, system: vSystem });
 // ---------- events ----------
 document.addEventListener('click', async (e) => {
   const t = e.target.closest('[data-ft]');
-  if (t) { Object.assign(S.find, { tab: t.dataset.ft, res: null, sel: new Set(), size: new Map(), root: t.dataset.ft === 'dev' && S.find.root === 'C:\\Users' ? (S.drives.find((d) => d.letter !== 'C:')?.letter + '\\' || 'C:\\Users') : S.find.root }); return render(); }
+  if (t) return findTab(t.dataset.ft);
   const fa = e.target.closest('[data-fa]');
   if (fa) {
     const k = fa.dataset.fa;
     if (k === 'run') return findRun();
     if (k === 'do') return findDo();
+    if (k === 'all') { (S.find.res || []).forEach((h) => S.find.sel.add(h.path)); return render(); }
     if (k === 'reveal') return invoke('reveal_file', { path: fa.dataset.p });
   }
   const ap = e.target.closest('[data-ap]');
@@ -197,7 +135,7 @@ document.addEventListener('change', (e) => {
   if (e.target.dataset.fp !== undefined) {
     const f = S.find, p = e.target.dataset.fp;
     if (e.target.checked) {
-      if (f.tab === 'dupes') {
+      if (f.tab === 'dupes' || f.tab === 'photos') {
         const g = f.res.find((x) => x.files.some((h) => h.path === p));
         if (g && g.files.filter((h) => h.path !== p).every((h) => f.sel.has(h.path))) { e.target.checked = false; return toast('Keep at least one copy', true); }
       }

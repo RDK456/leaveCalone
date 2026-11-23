@@ -3,6 +3,7 @@
 //! - Cleaning only touches fixed allowlisted roots (never a path from the UI) and never follows reparse points.
 //! - Moving copies, verifies counts+bytes, renames the original aside, links, verifies, and only then deletes. Every step rolls back.
 
+mod extra;
 mod tools;
 use serde::{Deserialize, Serialize};
 use std::os::windows::{fs::MetadataExt, process::CommandExt};
@@ -186,6 +187,11 @@ fn cats() -> Vec<Cat> {
         Cat { id: "chrome", name: "Chrome cache", desc: "Cached pages and code. Logins, bookmarks and history are untouched.", roots: browser_roots(local.join(r"Google\Chrome\User Data")), min_age: 0, admin: false, procs: &["chrome"], default_on: false },
         Cat { id: "edge", name: "Edge cache", desc: "Cached pages and code. Logins, bookmarks and history are untouched.", roots: browser_roots(local.join(r"Microsoft\Edge\User Data")), min_age: 0, admin: false, procs: &["msedge"], default_on: false },
         Cat { id: "brave", name: "Brave cache", desc: "Cached pages and code. Logins, bookmarks and history are untouched.", roots: browser_roots(local.join(r"BraveSoftware\Brave-Browser\User Data")), min_age: 0, admin: false, procs: &["brave"], default_on: false },
+        Cat { id: "thumbs", name: "Thumbnail and icon cache", desc: "Explorer thumbnails and icons. Rebuilt as you browse folders; files Explorer holds open are kept.", roots: vec![local.join(r"Microsoft\Windows\Explorer")], min_age: 0, admin: false, procs: &[], default_on: false },
+        Cat { id: "vscode", name: "VS Code cache", desc: "Cached code, GPU data and downloaded extension packages. Settings and extensions are untouched.", roots: vec![roam.join(r"Code\Cache"), roam.join(r"Code\CachedData"), roam.join(r"Code\Code Cache"), roam.join(r"Code\GPUCache"), roam.join(r"Code\CachedExtensionVSIXs")], min_age: 0, admin: false, procs: &["code"], default_on: false },
+        Cat { id: "slack", name: "Slack cache", desc: "Cached images and code. Your login and messages are untouched.", roots: vec![roam.join(r"Slack\Cache"), roam.join(r"Slack\Code Cache"), roam.join(r"Slack\GPUCache")], min_age: 0, admin: false, procs: &["slack"], default_on: false },
+        Cat { id: "gradle", name: "Gradle cache", desc: "Downloaded Android and Java build dependencies. Re-downloaded on the next build, which needs internet.", roots: vec![prof.join(r".gradle\caches")], min_age: 0, admin: false, procs: &["java", "gradle", "studio64"], default_on: false },
+        Cat { id: "yarn", name: "Yarn cache", desc: "Downloaded packages. Re-fetched when needed.", roots: vec![local.join(r"Yarn\Cache")], min_age: 0, admin: false, procs: &["yarn", "node"], default_on: false },
         Cat { id: "wutemp", name: "Windows Update download cache", desc: "Already-installed update packages. ", roots: vec![win.join(r"SoftwareDistribution\Download")], min_age: 0, admin: false, procs: &[], default_on: true },
         Cat { id: "do", name: "Delivery Optimization cache", desc: "Windows update files shared with other PCs. ", roots: vec![pd.join(r"Microsoft\Windows\DeliveryOptimization\Cache")], min_age: 0, admin: false, procs: &[], default_on: true },
         Cat { id: "wintemp", name: "Windows temp files", desc: "System-wide temp folder. ", roots: vec![win.join("Temp")], min_age: 3600, admin: false, procs: &[], default_on: true },
@@ -446,7 +452,7 @@ async fn move_candidates() -> Result<Vec<Cand>, String> {
                 for e in rd.flatten() {
                     let p = e.path();
                     let Ok(md) = fs::symlink_metadata(&p) else { continue };
-                    if md.is_dir() && !is_reparse(&md) && !denied(&p) && !(*area == "Profile" && p.file_name().map(|n| n.to_string_lossy() == "AppData").unwrap_or(false)) {
+                    if md.is_dir() && !is_reparse(&md) && !denied(&p) && !extra::excluded(&p) && !(*area == "Profile" && p.file_name().map(|n| n.to_string_lossy() == "AppData").unwrap_or(false)) {
                         paths.push((p, area.to_string()));
                     }
                 }
@@ -548,6 +554,9 @@ fn plan(src: &str, drive: &str) -> Result<MovePlan, String> {
     };
     if denied(&src) {
         problems.push("This folder is protected and cannot be moved".into());
+    }
+    if extra::excluded(&src) {
+        problems.push("This folder is on your exclusion list".into());
     }
     let md = fs::symlink_metadata(&src).map_err(|e| format!("Cannot read folder: {e}"))?;
     if !md.is_dir() { problems.push("Not a folder".into()); }
@@ -783,6 +792,8 @@ struct Settings {
     update_url: String,
     #[serde(default)]
     tray_on_close: bool,
+    #[serde(default)]
+    exclusions: Vec<String>,
 }
 fn lighten_dir() -> PathBuf {
     let d = envp("LOCALAPPDATA").join("Lighten");
@@ -818,16 +829,21 @@ fn save_settings(mut s: Settings) -> Result<Settings, String> {
     s.every_days = s.every_days.clamp(1, 30);
     s.update_url = s.update_url.trim().to_string();
     apply_schedule(&s)?;
-    fs::write(lighten_dir().join("settings.json"), serde_json::to_string_pretty(&s).unwrap()).map_err(|e| e.to_string())?;
+    s.exclusions = load_settings().exclusions; // edited only through set_exclusions
+    write_settings(&s)?;
     Ok(s)
+}
+fn write_settings(s: &Settings) -> Result<(), String> {
+    fs::write(lighten_dir().join("settings.json"), serde_json::to_string_pretty(s).unwrap()).map_err(|e| e.to_string())
 }
 #[tauri::command]
 fn last_scan() -> Option<serde_json::Value> {
     fs::read_to_string(lighten_dir().join("last-scan.json")).ok().and_then(|s| serde_json::from_str(&s).ok())
 }
 /// Runs from Task Scheduler: scan, optionally clean the default-safe set, record the result.
-fn headless() {
-    let st = load_settings();
+fn headless(force_clean: bool) {
+    let mut st = load_settings();
+    st.auto_clean |= force_clean;
     let cats = scan_cats("C:");
     let ok = |c: &&CatInfo| c.busy.is_none() && c.id != "recycle" && c.bytes > 0;
     let cleanable: u64 = cats.iter().filter(ok).map(|c| c.bytes).sum();
@@ -844,7 +860,34 @@ fn headless() {
         let msg = if freed > 0 { format!("Cleaned {:.1} GB. C: has {:.0} GB free.", freed as f64 / 1073741824.0, c_free as f64 / 1073741824.0) } else { format!("{:.1} GB can be cleaned. Open Lighten to review.", cleanable as f64 / 1073741824.0) };
         tools::toast("Lighten scan finished", &msg);
     }
+    say(&format!("{} MB cleanable, {} MB freed, C: {} GB free", cleanable >> 20, freed >> 20, c_free >> 30));
 }
+
+// ---------- command line ----------
+// The exe runs as administrator, so a console only receives output when launched from an already-elevated terminal.
+#[link(name = "kernel32")]
+extern "system" {
+    fn AttachConsole(pid: u32) -> i32;
+    fn SetStdHandle(which: u32, h: isize) -> i32;
+}
+fn attach_console() {
+    use std::os::windows::io::IntoRawHandle;
+    unsafe {
+        if AttachConsole(0xFFFF_FFFF) != 0 {
+            if let Ok(f) = fs::OpenOptions::new().write(true).open("CONOUT$") {
+                SetStdHandle(0xFFFF_FFF5, f.into_raw_handle() as isize);
+            }
+        }
+    }
+}
+fn say(s: &str) {
+    println!("{s}");
+}
+const HELP: &str = "Lighten command line (run from an elevated terminal to see output)
+  --scan      scan, record history, notify
+  --clean     scan, then clean the default safe set
+  --version   print the version
+  --uninstall remove schedule, shortcut and settings";
 
 // ---------- delta updater ----------
 use sha2::{Digest, Sha256};
@@ -987,7 +1030,11 @@ fn apply_patch_cli(a: &[String]) {
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let arg_after = |f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1..].to_vec());
-    if a.iter().any(|x| x == "--scan") { headless(); return; }
+    if a.iter().any(|x| x == "--scan" || x == "--clean" || x == "--version" || x == "--help" || x == "-h") {
+        attach_console();
+        if a.iter().any(|x| x == "--version") { say(env!("CARGO_PKG_VERSION")); } else if a.iter().any(|x| x == "--help" || x == "-h") { say(HELP); } else { headless(a.iter().any(|x| x == "--clean")); }
+        return;
+    }
     if let Some(r) = arg_after("--make-patch") { make_patch(&r); return; }
     if let Some(r) = arg_after("--apply-patch") { apply_patch_cli(&r); return; }
     if let Some(r) = arg_after("--gen-key") { tools::gen_key(&r); return; }
@@ -1016,7 +1063,8 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![drives, scan_clean, clean, list_dir, move_candidates, plan_move, move_folder, moved_list, move_back, admin_task, open_in_explorer, find_links, adopt_link, get_settings, save_settings, last_scan, app_info, check_update, apply_update,
-            tools::find_large, tools::find_dupes, tools::find_installers, tools::trash_files, tools::find_dev, tools::delete_dev, tools::reveal_file, tools::system_info, tools::system_task, tools::apps_list, tools::uninstall_app, tools::snapshot, tools::growth, tools::export_report, tools::install_state, tools::install_app, tools::uninstall_self])
+            tools::find_large, tools::find_dupes, tools::find_installers, tools::trash_files, tools::find_dev, tools::delete_dev, tools::reveal_file, tools::system_info, tools::system_task, tools::apps_list, tools::uninstall_app, tools::snapshot, tools::growth, tools::export_report, tools::install_state, tools::install_app, tools::uninstall_self,
+            extra::disk_scan, extra::fast_dir, extra::disk_release, extra::onedrive_scan, extra::onedrive_free, extra::trash_log, extra::restore_trashed, extra::find_empty, extra::delete_empty, extra::find_shortcuts, extra::find_similar, extra::startup_list, extra::startup_set, extra::winsxs_analyze, extra::set_exclusions, extra::profile_dir])
         .run(tauri::generate_context!())
         .expect("failed to start Lighten");
 }

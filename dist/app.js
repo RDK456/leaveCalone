@@ -108,14 +108,19 @@ function vMove() {
 
 async function loadExplore(path) {
   S.exp = path; S.expItems = null; render();
-  try { S.expItems = path ? await invoke('list_dir', { path }) : null; } catch (e) { toast(String(e), true); S.expItems = []; }
+  try {
+    if (!path) S.expItems = null;
+    else if (S.fast && path.toUpperCase().startsWith(S.fast)) {
+      try { S.expItems = await invoke('fast_dir', { path }); } catch (e) { toast(String(e), true); S.fast = null; S.expItems = await invoke('list_dir', { path }); }
+    } else S.expItems = await invoke('list_dir', { path });
+  } catch (e) { toast(String(e), true); S.expItems = []; }
   render();
 }
 function vExplore() {
   const p = S.exp;
   if (!p) {
-    const rows = S.drives.map((d) => `<div class="row sm2" style="grid-template-columns:1fr 120px 90px"><div class="n"><button class="link" data-open="${esc(d.letter + '\\')}">${esc(d.letter)} ${esc(d.label || 'Local disk')}</button></div><div class="r">${txt(d.total - d.free)} used</div><div class="r">${txt(d.free)} free</div></div>`).join('');
-    return `<div class="wrap">${head('Explore', 'Pick a drive and drill into the folders using the most space.')}<div class="card">${rows}</div></div>`;
+    const rows = S.drives.map((d) => `<div class="row sm2" style="grid-template-columns:1fr 120px 90px 120px"><div class="n"><button class="link" data-open="${esc(d.letter + '\\')}">${esc(d.letter)} ${esc(d.label || 'Local disk')}</button></div><div class="r">${txt(d.total - d.free)} used</div><div class="r">${txt(d.free)} free</div><div class="r"><button class="btn sm line" data-a="fastscan" data-p="${esc(d.letter)}" title="Reads the NTFS file table. Seconds instead of minutes.">Fast scan</button></div></div>`).join('');
+    return `<div class="wrap">${head('Explore', 'Pick a drive and drill into the folders using the most space. Fast scan reads the NTFS file table and is the quickest way to see a whole drive.')}<div class="card">${rows}</div></div>`;
   }
   const parent = p.replace(/\\+$/, '').split('\\').slice(0, -1).join('\\');
   const up = p.replace(/\\+$/, '').match(/^[A-Za-z]:$/) ? '' : (parent.match(/^[A-Za-z]:$/) ? parent + '\\' : parent);
@@ -128,8 +133,8 @@ function vExplore() {
       <div class="r">${fmt(e.bytes)}</div><div class="r mut">${e.is_dir ? e.files.toLocaleString() + ' files' : ''}</div>
       <div class="r">${e.is_dir && inProf && !e.link && S.moveDrive ? `<button class="btn sm line" data-a="move" data-p="${esc(e.path)}">Move…</button>` : ''}</div></div>`;
   }).join('') || `<div class="empty">${items ? 'Empty or no access.' : ''}</div>`;
-  return `<div class="wrap">${head('Explore', `<code>${esc(p)}</code>`, `<button class="btn line" data-open="${esc(up)}">${up ? 'Up' : 'Drives'}</button><button class="btn line" data-a="reveal" data-p="${esc(p)}">Open in Explorer</button>`)}
-    <div class="card"><div class="row ex h"><span>Name</span><span>Share</span><span class="r">Size</span><span class="r">Files</span><span></span></div>${items ? rows : skeleton()}</div></div>`;
+  return `<div class="wrap">${head('Explore', `<code>${esc(p)}</code>`, `<button class="btn line" data-open="${esc(up)}">${up ? 'Up' : 'Drives'}</button><button class="btn line" data-a="reveal" data-p="${esc(p)}">Open in Explorer</button><button class="btn line" data-a="expmode">${S.expMode === 'map' ? 'List' : 'Treemap'}</button>`)}
+    ${S.expMode === 'map' && items ? treemapHtml(items) : ''}<div class="card" ${S.expMode === 'map' && items ? 'hidden' : ''}><div class="row ex h"><span>Name</span><span>Share</span><span class="r">Size</span><span class="r">Files</span><span></span></div>${items ? rows : skeleton()}</div></div>`;
 }
 
 function vMoved() {
@@ -152,7 +157,7 @@ function vSettings() {
   const ls = S.lastScan;
   const lastTxt = ls ? `Last scheduled scan ${new Date(ls.when * 1000).toLocaleString()}: <b>${txt(ls.cleanable)}</b> cleanable${ls.auto_clean ? `, <b>${txt(ls.freed)}</b> cleaned` : ''}.` : 'No scheduled scan has run yet.';
   const updMsg = u ? (u.error ? `<span class="pill no">${esc(u.error)}</span>` : u.available ? `<span class="pill ok">${esc(u.latest)} available${u.delta ? ' (small delta download)' : ' (full download)'}</span>` : '<span class="pill">Up to date</span>') : '';
-  const inp = 'height:36px;border:1px solid var(--control);border-radius:6px;padding:0 10px;font:inherit;background:#fff';
+  const inp = 'height:36px;border:1px solid var(--control);border-radius:6px;padding:0 10px;font:inherit;background:var(--surface)';
   return `<div class="wrap">${head('Settings', `Lighten ${esc(i?.version || '')}`)}
     ${generalHtml()}
     <section><h2>Scheduled scan <span>${lastTxt}</span></h2><div class="card">
@@ -160,7 +165,7 @@ function vSettings() {
       <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Repeat every</b><small>Days between scans (1 to 30)</small></div><input id="s_days" type="number" min="1" max="30" value="${s.every_days || 7}" style="${inp};width:70px"></div>
       <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Also clean the safe set</b><small>Only the default-checked items. Never the Recycle Bin or browsers.</small></div><input type="checkbox" id="s_clean" ${s.auto_clean ? 'checked' : ''}></div></div>
       <p class="note"><button class="btn pri" data-a="savesettings">Save schedule</button></p></section>
-    <section><h2>Updates <span>${updMsg}</span></h2><div class="card">
+    <section><h2>Updates <span>${updMsg || (S.inst?.signing ? 'Signed updates required' : 'Signing key not built in: hash check only')}</span></h2><div class="card">
       <div class="row" style="grid-template-columns:1fr"><div class="n"><b>Update manifest URL</b><small style="white-space:normal">An https link to a JSON file. Downloads are checked against its SHA-256; a delta patch is used when one exists for your version.</small></div></div>
       <div class="row" style="grid-template-columns:1fr"><input id="s_url" value="${esc(s.update_url)}" placeholder="https://example.com/lighten/manifest.json" style="${inp};min-width:0;width:100%"></div></div>
       <p class="note"><button class="btn line" data-a="checkupd">Check for updates</button> ${u && u.available ? '<button class="btn pri" data-a="applyupd">Install update</button>' : ''}</p></section></div>`;
