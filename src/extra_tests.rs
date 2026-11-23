@@ -174,3 +174,41 @@ fn recycle_bin_metadata_parses() {
     assert_eq!(parse_i(&v1).as_deref(), Some(r"C:\Users\a\x.txt"));
     assert_eq!(parse_i(&[0u8; 10]), None);
 }
+
+/// Where does the space on C: live? Elevated: `cargo test mft_top -- --ignored`; writes %TEMP%\lighten-top.txt
+#[test]
+#[ignore]
+fn mft_top() {
+    let m = build_mft('C').unwrap();
+    let mut out = String::new();
+    let mut top: Vec<(u64, String)> = m.kids.get(&5).into_iter().flatten().map(|&i| (m.tot[i as usize].0, path_of(&m, i as usize).unwrap_or_default())).collect();
+    top.sort_by(|a, b| b.0.cmp(&a.0));
+    out += "TOP LEVEL\n";
+    for (b, p) in top.iter().take(15) { out += &format!("{:8.1} GB  {}\n", *b as f64 / 1e9, p); }
+    let mut own: Vec<(u64, String)> = (0..m.ents.len())
+        .filter(|&i| m.ents[i].as_ref().map_or(false, |e| e.dir))
+        .map(|i| {
+            let kids: u64 = m.kids.get(&(i as u32)).into_iter().flatten().filter(|&&k| m.ents[k as usize].as_ref().map_or(false, |e| e.dir)).map(|&k| m.tot[k as usize].0).sum();
+            (m.tot[i].0.saturating_sub(kids), i)
+        })
+        .map(|(b, i)| (b, path_of(&m, i).unwrap_or_default()))
+        .collect();
+    own.sort_by(|a, b| b.0.cmp(&a.0));
+    out += "\nFOLDERS BY OWN FILES\n";
+    for (b, p) in own.iter().take(30) { out += &format!("{:8.1} GB  {}\n", *b as f64 / 1e9, p); }
+    fs::write(std::env::temp_dir().join("lighten-top.txt"), out).unwrap();
+}
+
+#[test]
+#[ignore]
+fn mft_kids() {
+    let m = build_mft('C').unwrap();
+    let d = resolve(&m, r"Users\dhanu\AppData\Roaming\1DownloadManager\cache\work").unwrap();
+    let mut out = format!("dir {} tot {:?} self attrs {:#x}\n", d, m.tot[d as usize], m.ents[d as usize].as_ref().unwrap().attrs);
+    out += &format!("own size field {}\n", m.ents[d as usize].as_ref().unwrap().size);
+    for &k in m.kids.get(&d).into_iter().flatten() {
+        let e = m.ents[k as usize].as_ref().unwrap();
+        out += &format!("{} {} size {} attrs {:#x} dir {}\n", k, e.name, e.size, e.attrs, e.dir);
+    }
+    fs::write(std::env::temp_dir().join("lighten-kids.txt"), out).unwrap();
+}
