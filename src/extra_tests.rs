@@ -212,3 +212,26 @@ fn mft_kids() {
     }
     fs::write(std::env::temp_dir().join("lighten-kids.txt"), out).unwrap();
 }
+
+#[test]
+#[ignore]
+fn mft_gap() {
+    let m = build_mft('C').unwrap();
+    let mut out = format!("stats {:?} (sig, in use, base, ext, unreadable) root total {}\n", m.stats, m.tot[5].0);
+    let mut all = 0u64;
+    let mut orphan = 0u64;
+    let mut big: Vec<(u64, usize)> = vec![];
+    for (i, e) in m.ents.iter().enumerate() {
+        let Some(e) = e else { continue };
+        if e.dir { continue }
+        all += e.size;
+        if path_of(&m, i).is_none() { orphan += e.size }
+        big.push((e.size, i));
+    }
+    out += &format!("all file bytes {} orphan (no path to root) {}\n", all, orphan);
+    big.sort_by(|a, b| b.0.cmp(&a.0));
+    for (s, i) in big.iter().take(25) {
+        out += &format!("{:8.2} GB  {}  [{}]\n", *s as f64 / 1e9, path_of(&m, *i).unwrap_or_else(|| format!("(orphan) {}", m.ents[*i].as_ref().unwrap().name)), i);
+    }
+    fs::write(std::env::temp_dir().join("lighten-gap.txt"), out).unwrap();
+}
