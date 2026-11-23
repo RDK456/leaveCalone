@@ -869,11 +869,14 @@ fn headless(force_clean: bool) {
 extern "system" {
     fn AttachConsole(pid: u32) -> i32;
     fn SetStdHandle(which: u32, h: isize) -> i32;
+    fn GetStdHandle(which: u32) -> isize;
 }
 fn attach_console() {
     use std::os::windows::io::IntoRawHandle;
     unsafe {
-        if AttachConsole(0xFFFF_FFFF) != 0 {
+        let out = GetStdHandle(0xFFFF_FFF5);
+        let redirected = out != 0 && out != -1; // `> file` or a pipe: leave it alone
+        if AttachConsole(0xFFFF_FFFF) != 0 && !redirected {
             if let Ok(f) = fs::OpenOptions::new().write(true).open("CONOUT$") {
                 SetStdHandle(0xFFFF_FFF5, f.into_raw_handle() as isize);
             }
