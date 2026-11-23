@@ -146,4 +146,4 @@ lighten.exe --sign key.txt 0.0.2 <sha256> sig.txt
 
 ## Status
 
-v0.1.0, early. Tested: scanning, delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, and the UI. Real deletes, restore points, install and updater restart need more testing on varied machines. Back up what matters and use the dry-run report first.
+v0.1.1, early. Tested: scanning, delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, and the UI. Real deletes, restore points, install and updater restart need more testing on varied machines. Back up what matters and use the dry-run report first.
