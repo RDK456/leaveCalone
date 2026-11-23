@@ -65,13 +65,17 @@ function vSystem() {
   const pf = sysRow('Page file', s.pagefile.length ? s.pagefile.map(esc).join('<br>') : 'System managed. Shrinking it is not recommended, so Lighten only reports it.', '');
   const dk = s.docker ? sysRow('Docker', s.docker.map(esc).join('<br>') || 'No data', b('docker_prune', 'Prune unused') + b('docker_prune_all', 'Prune all unused…')) : sysRow('Docker', 'Not installed or not running.', '');
   const vh = s.vhdx.length ? s.vhdx.map((v) => sysRow(`Virtual disk <span class="u">${txt(v.bytes)}</span>`, esc(v.path), b('wsl_compact', 'Compact…', `data-p="${esc(v.path)}"`))).join('') : sysRow('WSL and Docker disks', 'None found.', '');
-  const rp = sysRow('Restore point', 'Create a Windows restore point now. Windows allows one every 24 hours, and System Protection must be on.', b('restore_point', 'Create'));
-  return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.', `<button class="btn line" data-sa="refresh">Refresh</button>`)}<div class="card">${wo}${hib}${pf}${dk}${vh}${winsxsRow()}${rp}</div>${startupHtml()}</div>`;
+  const rp = sysRow(`Restore points ${s.restore_used ? `<span class="u">${esc(s.restore_used)} used</span>` : ''}`, 'Create a Windows restore point now, or delete the old ones to free the space they hold. Windows allows one new point every 24 hours, and System Protection must be on.', b('restore_point', 'Create') + b('restore_delete', 'Delete all…'));
+  const kr = sysRow(`Windows crash reports <span class="u">${txt(s.kernel_reports || 0)}</span>`, 'Memory dumps Windows keeps after hardware or driver hiccups (LiveKernelReports). Safe to clear; Windows writes new ones only if the problem happens again.', s.kernel_reports ? b('kernel_reports', 'Clear…') : '');
+  const ck = sysRow('Check disk for errors', 'A read-only scan of C: for file-system problems, run while Windows is in use. Takes under a minute on most PCs and changes nothing.', b('disk_scan_check', 'Scan'));
+  return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.', `<button class="btn line" data-sa="refresh">Refresh</button>`)}<div class="card">${wo}${hib}${pf}${dk}${vh}${winsxsRow()}${kr}${rp}${ck}</div>${startupHtml()}</div>`;
 }
 const SYS_WARN = {
   winold: 'Permanently deletes C:\\Windows.old. You will not be able to go back to the previous Windows version.',
   hiber_off: 'Hibernation and Fast Startup will stop working until you turn it back on.',
   docker_prune_all: 'Removes every image not used by a container, not only dangling ones. They are downloaded again when needed.',
+  restore_delete: 'Deletes every restore point on C:. You will not be able to roll Windows back to an earlier date until a new one is created.',
+  kernel_reports: 'Deletes the crash reports in C:\\Windows\\LiveKernelReports. Nothing else is touched.',
   wsl_compact: 'Shuts down WSL and every running distro, then compacts the disk. Save your work first.',
 };
 async function sysRun(task, arg) {

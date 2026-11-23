@@ -259,3 +259,10 @@ fn hidden_live() {
     let out: String = h.iter().map(|x| format!("{} {}\n", x.bytes, x.path)).collect();
     fs::write(std::env::temp_dir().join("lighten-hidden.txt"), format!("{} hidden\n{out}", h.len())).unwrap();
 }
+
+#[test]
+fn restore_storage_is_read_for_c() {
+    let out = "Shadow Copy Storage association\n   For volume: (D:)\n   Used Shadow Copy Storage space: 0 bytes (0%)\n\nShadow Copy Storage association\n   For volume: (C:)\n   Used Shadow Copy Storage space: 3.74 GB (1%)\n";
+    assert_eq!(super::super::tools::shadow_used(out), "3.74 GB (1%)");
+    assert_eq!(super::super::tools::shadow_used("nothing"), "");
+}

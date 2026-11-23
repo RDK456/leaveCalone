@@ -384,6 +384,12 @@ pub struct SysInfo {
     pagefile: Vec<String>,
     docker: Option<Vec<String>>,
     vhdx: Vec<Vhdx>,
+    kernel_reports: u64,
+    restore_used: String,
+}
+/// "Used Shadow Copy Storage space" for C: from `vssadmin list shadowstorage` (one block per volume).
+pub(crate) fn shadow_used(out: &str) -> String {
+    out.split("For volume:").find(|b| b.trim_start().starts_with("(C:)")).and_then(|b| b.lines().find(|l| l.contains("Used Shadow Copy Storage space:"))).and_then(|l| l.split_once(':').map(|x| x.1.trim().to_string())).unwrap_or_default()
 }
 #[tauri::command]
 pub async fn system_info() -> Result<SysInfo, String> {
@@ -394,7 +400,10 @@ pub async fn system_info() -> Result<SysInfo, String> {
         let pagefile = run_ps("Get-CimInstance Win32_PageFileUsage | ForEach-Object { \"$($_.Name)  allocated $($_.AllocatedBaseSize) MB, peak $($_.PeakUsage) MB\" }").unwrap_or_default().lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
         let docker = Command::new("docker").args(["system", "df", "--format", "{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)"]).creation_flags(NO_WINDOW).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|s| s.to_string()).collect());
         let vhdx = find_vhdx().into_iter().map(|p| Vhdx { bytes: fs::metadata(&p).map(|m| m.len()).unwrap_or(0), path: p.to_string_lossy().into() }).collect();
-        SysInfo { windows_old, hiber, pagefile, docker, vhdx }
+        let kernel_reports = dir_size(Path::new(r"C:\Windows\LiveKernelReports"), 0).bytes;
+        // vssadmin lists one block per volume; take the "Used" line of the C: block
+        let restore_used = shadow_used(&run_ps("vssadmin list shadowstorage").unwrap_or_default());
+        SysInfo { windows_old, hiber, pagefile, docker, vhdx, kernel_reports, restore_used }
     })
     .await
 }
@@ -410,6 +419,11 @@ cmd /c rd /s /q $p; if(Test-Path $p){ 'Partly removed. Some files were in use.' 
             "docker_prune" => "docker system prune -f".into(),
             "docker_prune_all" => "docker system prune -a -f".into(),
             "restore_point" => "Enable-ComputerRestore -Drive 'C:\\' -ErrorAction SilentlyContinue; try { Checkpoint-Computer -Description 'Lighten' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop; 'Restore point created' } catch { 'Not created: ' + $_.Exception.Message }".into(),
+            "kernel_reports" => r#"$p='C:\Windows\LiveKernelReports'; $b=(Get-ChildItem $p -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+Get-ChildItem $p -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+'Removed {0:N1} GB of crash reports' -f ($b/1GB)"#.into(),
+            "restore_delete" => "vssadmin delete shadows /for=C: /all /quiet; 'Old restore points deleted'".into(),
+            "disk_scan_check" => "Repair-Volume -DriveLetter C -Scan -Verbose 4>&1 | Out-String".into(),
             "wsl_compact" => {
                 let a = arg.ok_or("Missing disk")?;
                 if !find_vhdx().iter().any(|p| lc(p) == lc(Path::new(&a))) { return Err("Not a known WSL or Docker disk".into()); }

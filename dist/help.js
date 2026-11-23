@@ -19,7 +19,7 @@ const ASK = [
   { k: ['move', 'another drive', 'other drive', 'd:', 'junction', 'symlink'], a: 'Move copies a folder to another drive, verifies it, and leaves a link so apps keep working.', go: [['Open Move', 'view:move']] },
   { k: ['moved', 'move back', 'undo move'], a: 'Moved folders lists everything linked to another drive and can move it back.', go: [['Open Moved folders', 'view:moved']] },
   { k: ['startup', 'slow boot', 'boot', 'starts with windows', 'autostart', 'login'], a: 'Startup apps can be turned off without uninstalling them.', go: [['Open System', 'view:system']] },
-  { k: ['winsxs', 'component store', 'dism', 'windows update', 'windows.old', 'hiberfil', 'hibernat', 'restore point', 'system'], a: 'The System page has the component store report, Windows.old, hibernation, restore points and other Windows tasks.', go: [['Open System', 'view:system']] },
+  { k: ['winsxs', 'component store', 'dism', 'windows update', 'windows.old', 'hiberfil', 'hibernat', 'restore point', 'crash', 'dump', 'disk check', 'errors', 'corrupt', 'system'], a: 'The System page has the component store report, Windows.old, hibernation, restore points and other Windows tasks.', go: [['Open System', 'view:system']] },
   { k: ['app', 'uninstall', 'program'], a: 'Apps lists installed programs by size.', go: [['Open Apps', 'view:apps']] },
   { k: ['schedule', 'automatic', 'background', 'notify', 'notification', 'every', 'auto clean', 'autoclean'], a: 'Scheduled scan is in Settings: turn it on, pick the days, and choose whether it also cleans the safe set.', go: [['Open Settings', 'view:settings']] },
   { k: ['tray', 'close button', 'minimize', 'quit'], a: 'The tray setting is under General in Settings.', go: [['Open Settings', 'view:settings']] },
