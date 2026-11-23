@@ -159,3 +159,18 @@ fn mft_live() {
     assert!(tf >= real.files * 9 / 10 && tf <= real.files * 11 / 10, "file count within 10% of a real walk");
     assert!(tb >= real.bytes * 9 / 10 && tb <= real.bytes + real.files * 65536, "size close to a real walk (cluster rounding adds a little)");
 }
+
+#[test]
+fn recycle_bin_metadata_parses() {
+    let p: Vec<u8> = r"C:\Users\a\x.txt".encode_utf16().chain([0]).flat_map(|c| c.to_le_bytes()).collect();
+    let mut v2 = vec![0u8; 24];
+    v2[0] = 2;
+    v2.extend((p.len() as u32 / 2).to_le_bytes());
+    v2.extend(&p);
+    assert_eq!(parse_i(&v2).as_deref(), Some(r"C:\Users\a\x.txt"));
+    let mut v1 = vec![0u8; 24];
+    v1[0] = 1;
+    v1.extend(&p);
+    assert_eq!(parse_i(&v1).as_deref(), Some(r"C:\Users\a\x.txt"));
+    assert_eq!(parse_i(&[0u8; 10]), None);
+}

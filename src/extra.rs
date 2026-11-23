@@ -73,10 +73,44 @@ pub fn log_trash(items: &[(String, u64)]) {
     }
     let _ = fs::write(tlog_path(), serde_json::to_string(&v).unwrap());
 }
-/// Newest first; only files that are still gone from their original place.
+/// Original path stored in a Recycle Bin `$I` metadata file (format v1 and v2).
+fn parse_i(b: &[u8]) -> Option<String> {
+    let off = if g64(b, 0) == 2 { 28 } else { 24 };
+    let u: Vec<u16> = b.get(off..)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+    if u.is_empty() { None } else { String::from_utf16(&u).ok() }
+}
+/// Original paths of everything in a drive's Recycle Bin; None if the bin can't be read.
+fn bin_paths(letter: char) -> Option<std::collections::HashSet<String>> {
+    let mut set = std::collections::HashSet::new();
+    let mut readable = false;
+    for sid in fs::read_dir(format!("{letter}:\\$Recycle.Bin")).ok()?.flatten() {
+        let Ok(rd) = fs::read_dir(sid.path()) else { continue };
+        readable = true;
+        for f in rd.flatten() {
+            if f.file_name().to_string_lossy().starts_with("$I") {
+                if let Some(p) = fs::read(f.path()).ok().and_then(|b| parse_i(&b)) {
+                    set.insert(lc(Path::new(&p)));
+                }
+            }
+        }
+    }
+    readable.then_some(set)
+}
+/// Newest first; only files still in the Recycle Bin (purged ones can't be restored) and gone from their original place.
 #[tauri::command]
 pub fn trash_log() -> Vec<Trashed> {
-    load_tlog().into_iter().rev().filter(|t| !Path::new(&t.path).exists()).take(150).collect()
+    let mut bins: HashMap<char, Option<std::collections::HashSet<String>>> = HashMap::new();
+    load_tlog()
+        .into_iter()
+        .rev()
+        .filter(|t| !Path::new(&t.path).exists())
+        .filter(|t| {
+            let d = t.path.chars().next().unwrap_or('C').to_ascii_uppercase();
+            // if a bin can't be read we keep the entry rather than hide a restorable file
+            bins.entry(d).or_insert_with(|| bin_paths(d)).as_ref().map_or(true, |s| s.contains(&lc(Path::new(&t.path))))
+        })
+        .take(150)
+        .collect()
 }
 #[tauri::command]
 pub async fn restore_trashed(paths: Vec<String>) -> Result<u64, String> {
@@ -709,13 +743,14 @@ fn uf_find(p: &mut [usize], mut x: usize) -> usize {
     x
 }
 #[tauri::command]
-pub async fn find_similar(root: String, max_dist: u32) -> Result<Vec<DupGroup>, String> {
+pub async fn find_similar(root: String, max_dist: u32, cap: Option<usize>) -> Result<Vec<DupGroup>, String> {
+    let cap = cap.unwrap_or(6000).clamp(100, 100_000);
     blocking(move || -> Result<Vec<DupGroup>, String> {
         let root = root_ok(&root)?;
         let mut files: Vec<FileHit> = vec![];
         walk_files(&root, false, &mut |p, md| {
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-            if ["jpg", "jpeg", "png", "gif", "bmp", "webp"].contains(&ext.as_str()) && (50_000..=60_000_000).contains(&md.len()) && files.len() < 6000 {
+            if ["jpg", "jpeg", "png", "gif", "bmp", "webp"].contains(&ext.as_str()) && (50_000..=60_000_000).contains(&md.len()) && files.len() < cap {
                 files.push(hit(p, md));
             }
         });

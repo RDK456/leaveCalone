@@ -1,19 +1,19 @@
 // Find files: nine finders in one view. Loaded before tools.js; shares globals with app.js.
 const FT = { large: 'Large files', dupes: 'Duplicates', photos: 'Similar photos', installers: 'Installers', dev: 'Dev leftovers', empty: 'Empty folders', shortcuts: 'Broken shortcuts', onedrive: 'OneDrive', undo: 'Undo' };
-const FCFG = { large: ['root', 'min'], dupes: ['root', 'min'], photos: ['root', 'dist'], installers: ['days'], dev: ['root', 'days'], empty: ['root'], shortcuts: [], onedrive: [], undo: [] };
+const FCFG = { large: ['root', 'min'], dupes: ['root', 'min'], photos: ['root', 'dist', 'cap'], installers: ['days'], dev: ['root', 'days'], empty: ['root'], shortcuts: [], onedrive: [], undo: [] };
 const FAUTO = ['shortcuts', 'onedrive', 'undo']; // nothing to choose: they run when opened
 const FNOTE = {
   large: 'The biggest files in a folder. On NTFS drives the file table is read directly, so a whole drive takes seconds. Windows and Program Files are skipped.',
   dupes: 'Identical files, matched by content hash. The oldest copy in each set is kept unless you change it.',
-  photos: 'Photos that look alike even when resized or re-saved, matched by a visual fingerprint. The largest in each set is kept. Check each set before you delete.',
+  photos: 'Photos that look alike even when resized or re-saved, matched by a visual fingerprint. The largest in each set is kept. Check each set before you delete. Only the first photos found are checked; raise the limit for big libraries (slower).',
   installers: 'iso, msi, msix and exe files in Downloads, plus iso/msi/msix on the Desktop and in Documents.',
   dev: 'node_modules, Rust target and Python venv folders in projects you have not touched. They are rebuilt by npm, cargo or pip.',
   empty: 'Folders with nothing inside, not even empty subfolders. Nothing is selected for you: some programs expect an empty folder to exist.',
   shortcuts: 'Desktop and Start menu shortcuts whose target no longer exists. Shortcuts to network drives, unplugged drives and Store apps are left alone.',
   onedrive: 'Files that are on this PC and in your cloud. Freeing space keeps them in OneDrive and downloads them again when opened. Files not yet uploaded are refused.',
-  undo: 'Files Lighten sent to the Recycle Bin that are still there. Restore puts them back where they were.',
+  undo: 'Files Lighten sent to the Recycle Bin that are still in it (emptied ones are not listed). Restore puts them back where they were.',
 };
-S.find = { tab: 'large', root: 'C:\\Users', min: 100, days: 90, dist: 4, res: null, busy: false, sel: new Set(), size: new Map(), perm: false, roots: [] };
+S.find = { tab: 'large', root: 'C:\\Users', min: 100, days: 90, dist: 4, cap: 6000, res: null, busy: false, sel: new Set(), size: new Map(), perm: false, roots: [] };
 S.profile = null;
 const isGrp = () => S.find.tab === 'dupes' || S.find.tab === 'photos';
 
@@ -37,6 +37,7 @@ function vFind() {
     ${cfg.includes('min') ? `<select id="f_min" aria-label="Minimum size">${[10, 100, 500, 1000].map((m) => `<option value="${m}" ${f.min === m ? 'selected' : ''}>Over ${m >= 1000 ? '1 GB' : m + ' MB'}</option>`).join('')}</select>` : ''}
     ${cfg.includes('days') ? `<select id="f_days" aria-label="Older than">${[30, 60, 90, 180, 365].map((d) => `<option value="${d}" ${f.days === d ? 'selected' : ''}>${f.tab === 'dev' ? 'Idle' : 'Older than'} ${d} days</option>`).join('')}</select>` : ''}
     ${cfg.includes('dist') ? `<select id="f_dist" aria-label="How alike"><option value="4" ${f.dist === 4 ? 'selected' : ''}>Near-identical</option><option value="8" ${f.dist === 8 ? 'selected' : ''}>Similar</option></select>` : ''}
+    ${cfg.includes('cap') ? `<select id="f_cap" aria-label="How many photos to check">${[6000, 20000, 50000, 100000].map((c) => `<option value="${c}" ${f.cap === c ? 'selected' : ''}>Check up to ${c.toLocaleString()}</option>`).join('')}</select>` : ''}
     <button class="btn pri" data-fa="run" ${f.busy ? 'disabled' : ''}>${f.busy ? 'Scanning…' : FAUTO.includes(f.tab) ? 'Rescan' : 'Scan'}</button>
     ${['empty', 'onedrive', 'undo'].includes(f.tab) && f.res?.length ? '<button class="btn line" data-fa="all">Select all</button>' : ''}</div>`;
   let body = '';
@@ -64,14 +65,14 @@ function fileRow(h) {
 }
 async function findRun() {
   const f = S.find;
-  f.root = $('#f_root')?.value ?? f.root; f.min = +($('#f_min')?.value ?? f.min); f.days = +($('#f_days')?.value ?? f.days); f.dist = +($('#f_dist')?.value ?? f.dist);
+  f.root = $('#f_root')?.value ?? f.root; f.min = +($('#f_min')?.value ?? f.min); f.days = +($('#f_days')?.value ?? f.days); f.dist = +($('#f_dist')?.value ?? f.dist); f.cap = +($('#f_cap')?.value ?? f.cap);
   const tab = f.tab;
   f.busy = true; f.res = null; f.sel = new Set(); f.size = new Map(); render();
   try {
     let res;
     if (tab === 'large') res = await invoke('find_large', { root: f.root, minMb: f.min });
     else if (tab === 'dupes') res = await invoke('find_dupes', { root: f.root, minMb: f.min });
-    else if (tab === 'photos') res = await invoke('find_similar', { root: f.root, maxDist: f.dist });
+    else if (tab === 'photos') res = await invoke('find_similar', { root: f.root, maxDist: f.dist, cap: f.cap });
     else if (tab === 'installers') res = await invoke('find_installers', { days: f.days });
     else if (tab === 'dev') res = await invoke('find_dev', { root: f.root, days: f.days });
     else if (tab === 'empty') res = (await invoke('find_empty', { root: f.root })).map((h) => ({ ...h, bytes: 0 }));
