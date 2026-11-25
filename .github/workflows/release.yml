@@ -1,0 +1,64 @@
+# Push a tag like v0.1.2 to build, test and create a DRAFT release. Publish it by hand after checking it.
+# Optional repository secrets:
+#   LIGHTEN_UPDATE_KEY        contents of update.key; adds the signed latest.json for in-app updates
+#   AUTHENTICODE_PFX_BASE64   code-signing certificate (.pfx), base64
+#   AUTHENTICODE_PFX_PASSWORD its password
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      PFX: ${{ secrets.AUTHENTICODE_PFX_BASE64 }}
+      PFX_PASSWORD: ${{ secrets.AUTHENTICODE_PFX_PASSWORD }}
+      UPDATE_KEY: ${{ secrets.LIGHTEN_UPDATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $v" }
+          "VERSION=$v" | Add-Content $env:GITHUB_ENV
+      - name: Test
+        env:
+          __COMPAT_LAYER: RunAsInvoker
+        run: cargo test --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Collect the program
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory out | Out-Null
+          Copy-Item target\release\lighten.exe out\Lighten.exe
+      - name: Code sign
+        if: env.PFX != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'cert.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX))
+          try {
+            $tool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+            & $tool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $pfx /p $env:PFX_PASSWORD out\Lighten.exe
+            if ($LASTEXITCODE) { throw 'signtool failed' }
+          } finally { Remove-Item $pfx -Force }
+      - name: Update manifest
+        if: env.UPDATE_KEY != ''
+        shell: pwsh
+        run: |
+          $key = Join-Path $env:RUNNER_TEMP 'update.key'
+          [IO.File]::WriteAllText($key, $env:UPDATE_KEY.Trim())
+          try { .\scripts\make-latest.ps1 -Exe out\Lighten.exe -Version $env:VERSION -KeyFile $key -Out out\latest.json }
+          finally { Remove-Item $key -Force }
+      - name: Create the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $sha = (Get-FileHash out\Lighten.exe -Algorithm SHA256).Hash.ToLower()
+          $files = @(Get-ChildItem out -File | ForEach-Object FullName)
+          gh release create $env:GITHUB_REF_NAME @files --draft --title "Lighten $env:GITHUB_REF_NAME" --notes "SHA-256 of Lighten.exe: $sha" --generate-notes

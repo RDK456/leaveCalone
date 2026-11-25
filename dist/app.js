@@ -39,6 +39,45 @@ const defBytes = () => (S.cats || []).filter((c) => c.default_on && !c.busy).red
 const cleanable = () => (S.cats || []).filter((c) => !c.busy).reduce((a, c) => a + c.bytes, 0);
 const movable = () => (S.cands || []).filter((c) => c.status === 'ready').reduce((a, c) => a + c.bytes, 0);
 
+// ---------- sortable columns ----------
+S.sorts = { find: null, apps: { k: 'bytes', d: -1 }, explore: { k: 'bytes', d: -1 } };
+const TEXT_KEYS = ['name', 'project'];
+function sortRows(rows, s) {
+  if (!s) return rows;
+  return rows.slice().sort((a, b) => s.d * (TEXT_KEYS.includes(s.k) ? String(a[s.k] ?? '').localeCompare(String(b[s.k] ?? '')) : (a[s.k] ?? 0) - (b[s.k] ?? 0)));
+}
+function sortBtn(table, key, label, right) {
+  const s = S.sorts[table], on = s && s.k === key;
+  const say = on ? (s.d > 0 ? ', sorted ascending' : ', sorted descending') : '';
+  return `<button class="sorth ${on ? 'on ' + (s.d > 0 ? 'up' : 'down') : ''} ${right ? 'r' : ''}" data-sort="${table}:${key}" aria-label="Sort by ${label}${say}">${label}</button>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-sort]'); if (!b) return;
+  const [table, k] = b.dataset.sort.split(':'), s = S.sorts[table];
+  S.sorts[table] = { k, d: s && s.k === k ? -s.d : TEXT_KEYS.includes(k) ? 1 : -1 };
+  render();
+});
+
+// ---------- scan progress and cancel ----------
+let progTimer = null;
+const progressHtml = () => '<div class="prog"><progress id="sp" aria-label="Scan progress"></progress><span id="spt" class="mut">Starting…</span><button class="btn sm line" data-cancel>Cancel scan</button></div>';
+const isCancel = (e) => String(e).includes('Scan cancelled');
+function watchScan() {
+  clearInterval(progTimer);
+  progTimer = setInterval(async () => {
+    let p; try { p = await invoke('scan_progress'); } catch { return; }
+    const bar = $('#sp'); if (!bar) return;
+    if (p.total) { bar.max = p.total; bar.value = Math.min(p.done, p.total); } else bar.removeAttribute('value');
+    $('#spt').textContent = p.total ? `${p.done.toLocaleString()} of ${p.total.toLocaleString()} checked` : `${p.done.toLocaleString()} checked`;
+  }, 400);
+}
+const unwatchScan = () => clearInterval(progTimer);
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-cancel]'); if (!b) return;
+  b.disabled = true; b.textContent = 'Cancelling…';
+  invoke('cancel_scan');
+});
+
 // ---------- views ----------
 function head(title, sub, acts) {
   return `<div class="title"><div><h1>${esc(title)}</h1><p class="sub">${sub || ''}</p></div><div class="acts">${acts || ''}</div></div>`;
@@ -66,11 +105,11 @@ function vOverview() {
   const topMove = (cd || []).slice(0, 5);
   const rowsC = topClean.map((x) => `<div class="row sm2"><div class="n"><b>${esc(x.name)}</b><small>${esc(x.busy ? x.busy + ' is running' : 'Safe')}</small></div><div class="r">${fmt(x.bytes)}</div><div></div></div>`).join('') || `<div class="empty">${sc ? 'Nothing to clean.' : ''}</div>`;
   const rowsM = topMove.map((x) => `<div class="row sm2"><div class="n"><b>${esc(x.name)}</b><small>${esc(x.area)}</small></div><div class="r">${fmt(x.bytes)}</div><div class="r"><button class="btn sm line" data-a="move" data-p="${esc(x.path)}" ${x.status === 'busy' ? 'disabled' : ''}>Move</button></div></div>`).join('') || `<div class="empty">${cd ? 'Nothing large to move.' : ''}</div>`;
-  return `<div class="wrap">${head('Overview', finding, act)}${kpis}
+  return `<div class="wrap">${head('Overview', finding, act)}${hiddenWarning()}${kpis}
     <section><h2>Drives</h2><div class="card">${drv || skeleton()}</div></section>
     ${growthHtml()}
     <section class="two"><div><h2>Largest cleanable <span><button class="link" data-v="clean">View all</button></span></h2><div class="card">${sc ? rowsC : skeleton()}</div></div>
-    <div><h2>Largest movable <span><button class="link" data-v="move">View all</button></span></h2><div class="card">${cd ? rowsM : skeleton()}</div></div></section></div>`;
+    <div><h2>Largest movable <span><button class="link" data-v="move">View all</button></span></h2><div class="card">${cd ? rowsM : skeleton()}</div></div></section>${historyHtml()}</div>`;
 }
 
 function vClean() {
@@ -125,16 +164,16 @@ function vExplore() {
   const parent = p.replace(/\\+$/, '').split('\\').slice(0, -1).join('\\');
   const up = p.replace(/\\+$/, '').match(/^[A-Za-z]:$/) ? '' : (parent.match(/^[A-Za-z]:$/) ? parent + '\\' : parent);
   const items = S.expItems;
-  const max = items?.[0]?.bytes || 1;
-  const rows = (items || []).slice(0, 200).map((e, i) => {
+  const max = Math.max(1, ...(items || []).map((e) => e.bytes));
+  const rows = sortRows(items || [], S.sorts.explore).slice(0, 200).map((e) => {
     const inProf = /^[A-Za-z]:\\Users\\/i.test(e.path);
     return `<div class="row ex"><div class="n">${e.is_dir ? `<button class="link" data-open="${esc(e.path)}">${esc(e.name)}</button>` : `<b>${esc(e.name)}</b>`}${e.link ? '<small>Link</small>' : ''}</div>
-      <div><div class="thin"><i class="${i === 0 ? 'top' : ''}" style="width:${Math.max(1, (e.bytes / max) * 100)}%"></i></div></div>
+      <div><div class="thin"><i class="${e.bytes === max ? 'top' : ''}" style="width:${Math.max(1, (e.bytes / max) * 100)}%"></i></div></div>
       <div class="r">${fmt(e.bytes)}</div><div class="r mut">${e.is_dir ? e.files.toLocaleString() + ' files' : ''}</div>
       <div class="r">${e.is_dir && inProf && !e.link && S.moveDrive ? `<button class="btn sm line" data-a="move" data-p="${esc(e.path)}">Move…</button>` : ''}</div></div>`;
   }).join('') || `<div class="empty">${items ? 'Empty or no access.' : ''}</div>`;
   return `<div class="wrap">${head('Explore', `<code>${esc(p)}</code>`, `<button class="btn line" data-open="${esc(up)}">${up ? 'Up' : 'Drives'}</button><button class="btn line" data-a="reveal" data-p="${esc(p)}">Open in Explorer</button><button class="btn line" data-a="expmode">${S.expMode === 'map' ? 'List' : 'Treemap'}</button>`)}
-    ${hiddenHtml()}${S.expMode === 'map' && items ? treemapHtml(items) : ''}<div class="card" ${S.expMode === 'map' && items ? 'hidden' : ''}><div class="row ex h"><span>Name</span><span>Share</span><span class="r">Size</span><span class="r">Files</span><span></span></div>${items ? rows : skeleton()}</div></div>`;
+    ${hiddenHtml()}${S.expMode === 'map' && items ? treemapHtml(items) : ''}<div class="card" ${S.expMode === 'map' && items ? 'hidden' : ''}><div class="row ex h">${sortBtn('explore', 'name', 'Name')}<span>Share</span>${sortBtn('explore', 'bytes', 'Size', true)}${sortBtn('explore', 'files', 'Files', true)}<span></span></div>${items ? rows : skeleton()}</div></div>`;
 }
 
 function vMoved() {
@@ -166,8 +205,8 @@ function vSettings() {
       <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Also clean the safe set</b><small style="white-space:normal">After each scan, delete the items that are ticked by default on the Clean page (temp files, shader caches, logs and similar that apps rebuild). It never empties the Recycle Bin, never touches browser data or the opt-in items, and skips anything in use or on your exclusion list. Off means scan and notify only.</small></div><input type="checkbox" id="s_clean" aria-label="Also clean the safe set" ${s.auto_clean ? 'checked' : ''}></div></div>
       <p class="note"><button class="btn pri" data-a="savesettings">Save schedule</button> Applies the three settings above. Nothing changes until you press Save.</p></section>
     <section><h2>Updates <span>${updMsg || (S.inst?.signing ? 'Signed updates required' : 'Signing key not built in: hash check only')}</span></h2><div class="card">
-      <div class="row" style="grid-template-columns:1fr"><div class="n"><b>Update manifest URL</b><small style="white-space:normal">An https link to a small JSON file that names the newest version. Lighten only accepts it if it is signed with the key built into this copy, and checks the download against its SHA-256. When a patch exists for your version only the difference is downloaded. Leave empty to turn updates off; nothing is ever checked in the background.</small></div></div>
-      <div class="row" style="grid-template-columns:1fr"><input id="s_url" aria-label="Update manifest URL" value="${esc(s.update_url)}" placeholder="https://example.com/lighten/manifest.json" style="${inp};min-width:0;width:100%"></div></div>
+      <div class="row" style="grid-template-columns:1fr"><div class="n"><b>Update manifest URL</b><small style="white-space:normal">Leave empty to use the official releases on GitHub, or enter your own https link to a small JSON file that names the newest version. Lighten only accepts it if it is signed with the key built into this copy, and checks the download against its SHA-256. When a patch exists for your version only the difference is downloaded. Nothing is checked until you press the button.</small></div></div>
+      <div class="row" style="grid-template-columns:1fr"><input id="s_url" aria-label="Update manifest URL" value="${esc(s.update_url)}" placeholder="Official GitHub releases" style="${inp};min-width:0;width:100%"></div></div>
       <p class="note"><button class="btn line" data-a="checkupd">Check for updates</button> ${u && u.available ? '<button class="btn pri" data-a="applyupd">Install update</button>' : ''}</p></section></div>`;
 }
 
@@ -315,4 +354,9 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'drv') { S.moveDrive = e.target.value; render(); }
 });
 window.addEventListener('load', scan);
+// Started from Explorer's "Analyze with Lighten": open that folder.
+window.addEventListener('load', async () => {
+  let p = null; try { p = await invoke('launch_path'); } catch {}
+  if (p) { await go('explore'); loadExplore(p); }
+});
 setInterval(() => { if (!dlg.open && !S.scanning && document.visibilityState === 'visible' && cur !== 'explore') scan(); }, 30 * 60 * 1000);

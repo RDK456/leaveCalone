@@ -24,10 +24,15 @@ const ASK = [
   { k: ['schedule', 'automatic', 'background', 'notify', 'notification', 'every', 'auto clean', 'autoclean'], a: 'Scheduled scan is in Settings: turn it on, pick the days, and choose whether it also cleans the safe set.', go: [['Open Settings', 'view:settings']] },
   { k: ['tray', 'close button', 'minimize', 'quit'], a: 'The tray setting is under General in Settings.', go: [['Open Settings', 'view:settings']] },
   { k: ['exclude', 'protect', 'never touch', 'skip folder', 'ignore', 'keep my'], a: 'Add the folder under "Never touch these" in Settings. Every finder, Clean and Move will skip it.', go: [['Open exclusions', 'excl']] },
-  { k: ['update', 'version', 'upgrade'], a: 'Updates are under Settings. Set a manifest URL, then press Check for updates.', go: [['Open Settings', 'view:settings']] },
+  { k: ['update', 'version', 'upgrade'], a: 'Updates are under Settings. Press Check for updates; leave the address empty to use the official releases.', go: [['Open Settings', 'view:settings']] },
   { k: ['dark', 'light', 'theme', 'night'], a: 'Switches between the light and dark theme.', go: [['Switch theme', 'theme']] },
   { k: ['report', 'dry run', 'preview what'], a: 'The dry-run report lists what a clean would delete, without deleting. It is in Settings under General.', go: [['Open Settings', 'view:settings']] },
   { k: ['install', 'start menu'], a: 'Install and Uninstall are in Settings under General.', go: [['Open Settings', 'view:settings']] },
+  { k: ['cancel', 'stop scan', 'taking too long', 'stuck', 'slow scan'], a: 'Every long scan has a Cancel scan button under its progress bar. A cancelled scan shows no partial results.', go: [['Open Find', 'view:find']] },
+  { k: ['csv', 'excel', 'spreadsheet', 'export', 'list of files'], a: 'Run any finder, then press Export CSV. The file is saved to your Desktop. A search first narrows what is exported.', go: [['Find large files', 'find:large']] },
+  { k: ['history', 'what was cleaned', 'what did', 'freed', 'last clean', 'log'], a: 'Recent cleanups, at the bottom of Overview, lists what was cleaned, deleted or moved, and when.', go: [['Open Overview', 'view:overview']] },
+  { k: ['right click', 'right-click', 'context menu', 'explorer menu', 'analyze'], a: 'Settings, General: add "Analyze with Lighten" to the folder and drive right-click menu.', go: [['Open Settings', 'view:settings']] },
+  { k: ['firefox', 'steam', 'epic', 'teams', 'spotify', 'adobe', 'premiere'], a: 'The Clean page has caches for Firefox, Steam, Epic Games, Teams, Spotify and Adobe. They are not ticked by default, and an app must be closed first.', go: [['Open Clean', 'view:clean']] },
   { k: ['command', 'cli', 'terminal', 'script'], a: 'From an elevated terminal: Lighten.exe --scan, --clean, --version, --help. Output can also be redirected to a file.', go: [] },
 ];
 const ASK_TIPS = 'Try: "c drive is full", "find duplicates", "turn on dark mode", "protect a folder", "undo delete", "slow startup".';

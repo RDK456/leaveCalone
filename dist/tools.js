@@ -26,6 +26,23 @@ function dropBanner(g) {
     : 'The "Grew most" list shows where it went.';
   return `<div class="alert"><b>Free space on C: fell by ${txt(g.drop)}</b> since ${dateOf(g.since)}. ${why}</div>`;
 }
+// ---------- hidden-space warning and cleanup history ----------
+S.lastHidden = []; S.actions = [];
+function hiddenWarning() {
+  return (S.lastHidden || []).filter((h) => Date.now() / 1000 - h.when < 30 * 86400)
+    .map((h) => `<div class="alert"><b>${txt(h.bytes)} on ${esc(h.drive)} is used by ${h.files} file(s) Windows cannot find.</b> Seen by the Fast scan on ${dateOf(h.when)}. <button class="link" data-v="explore">Fast scan ${esc(h.drive)} again</button> to check and fix it.</div>`).join('');
+}
+function historyHtml() {
+  const l = S.actions || [];
+  if (!l.length) return '';
+  const total = l.filter((a) => a.freed).reduce((s, a) => s + a.bytes, 0);
+  const rows = l.slice(0, 8).map((a) => `<div class="row" style="grid-template-columns:1fr 100px 110px"><div class="n"><b>${esc(a.what)}</b><small>${a.items ? `${a.items.toLocaleString()} item(s)` : ''}${a.freed ? '' : ' · space is freed when the Recycle Bin is emptied'}</small></div><div class="r mut">${dateOf(a.when)}</div><div class="r">${fmt(a.bytes)}</div></div>`).join('');
+  return `<section><h2>Recent cleanups <span>${txt(total)} freed or moved in the last ${l.length} action(s)</span></h2><div class="card">${rows}</div></section>`;
+}
+async function loadExtras() {
+  try { [S.lastHidden, S.actions] = await Promise.all([invoke('last_hidden'), invoke('clean_history')]); } catch {}
+  if (cur === 'overview') render();
+}
 function growthHtml() {
   const g = S.growth;
   if (!g) return '';
@@ -39,17 +56,17 @@ function growthBody(g) {
     <div><h2>Grew most <span>last ${g.days || 1} day(s), GB</span></h2><div class="card">${rows}</div></div></section>`;
 }
 async function loadGrowth() { try { S.growth = await invoke('growth'); } catch {} if (cur === 'overview') render(); }
-window.afterScan = () => { invoke('snapshot', { force: false }).then(loadGrowth).catch(() => {}); loadGrowth(); };
+window.afterScan = () => { invoke('snapshot', { force: false }).then(loadGrowth).catch(() => {}); loadGrowth(); loadExtras(); };
 
 // ---------- Apps ----------
 S.apps = null; S.appq = '';
 function vApps() {
   const q = S.appq.toLowerCase();
-  const list = (S.apps || []).filter((a) => !q || (a.name + a.publisher).toLowerCase().includes(q)).sort((a, b) => b.bytes - a.bytes);
-  const rows = list.map((a) => `<div class="row" style="grid-template-columns:1fr 90px 90px 100px 170px"><div class="n"><b>${esc(a.name)}</b><small title="${esc(a.location)}">${esc(a.publisher || '–')}${a.location ? ' · ' + esc(a.location) : ''}</small></div><div class="mut">${esc(a.version)}</div><div class="r">${a.bytes ? fmt(a.bytes) : dash}</div><div class="r mut">${a.last_used ? dateOf(a.last_used) : '–'}</div>
+  const list = (S.apps || []).filter((a) => !q || (a.name + a.publisher).toLowerCase().includes(q));
+  const rows = sortRows(list, S.sorts.apps).map((a) => `<div class="row" style="grid-template-columns:1fr 90px 90px 100px 170px"><div class="n"><b>${esc(a.name)}</b><small title="${esc(a.location)}">${esc(a.publisher || '–')}${a.location ? ' · ' + esc(a.location) : ''}</small></div><div class="mut">${esc(a.version)}</div><div class="r">${a.bytes ? fmt(a.bytes) : dash}</div><div class="r mut">${a.last_used ? dateOf(a.last_used) : '–'}</div>
     <div class="r">${a.movable ? `<button class="btn sm line" data-ap="move" data-p="${esc(a.location)}">Move…</button> ` : ''}<button class="btn sm line" data-ap="uninstall" data-id="${esc(a.id)}">Uninstall</button></div></div>`).join('') || `<div class="empty">${S.apps ? 'No apps match.' : ''}</div>`;
   return `<div class="wrap">${head('Installed apps', 'Sorted by size. "Last used" comes from Windows Prefetch and may be blank.', `<input class="t" id="a_q" aria-label="Search installed apps" placeholder="Search" value="${esc(S.appq)}" style="width:220px;height:36px;border:1px solid var(--control);border-radius:6px;padding:0 10px;font:inherit">`)}
-    <div class="card"><div class="row h" style="grid-template-columns:1fr 90px 90px 100px 170px"><span>App</span><span>Version</span><span class="r">Size</span><span class="r">Last used</span><span></span></div>${S.apps ? rows : skeleton()}</div>
+    <div class="card"><div class="row h" style="grid-template-columns:1fr 90px 90px 100px 170px">${sortBtn('apps', 'name', 'App')}<span>Version</span>${sortBtn('apps', 'bytes', 'Size', true)}${sortBtn('apps', 'last_used', 'Last used', true)}<span></span></div>${S.apps ? rows : skeleton()}</div>
     <p class="note">Move works for apps directly inside Program Files or your profile. Apps with a running service, or Microsoft system components, are refused.</p></div>`;
 }
 
@@ -96,18 +113,19 @@ function generalHtml() {
   const s = S.settings, i = S.inst;
   return `<section style="margin-top:0"><h2>General</h2><div class="card">
     <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Keep running in the tray when closed</b><small style="white-space:normal">Closing the window hides Lighten in the notification area instead of quitting, so it opens instantly. Scheduled scans do not need this; they run through Task Scheduler either way.</small></div><input type="checkbox" id="s_tray" aria-label="Keep running in the tray when closed" ${s.tray_on_close ? 'checked' : ''}></div>
+    <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Right-click menu in Explorer</b><small style="white-space:normal">Adds "Analyze with Lighten" when you right-click a folder or drive; Lighten opens showing what uses the space there. Windows asks for admin rights as usual. It applies to your account only and points at this copy of Lighten, so add it again if you move the file. On Windows 11 it is under "Show more options".</small></div><button class="btn sm line" data-ta="menu">${S.menu ? 'Remove' : 'Add'}</button></div>
     <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Dry-run report</b><small style="white-space:normal">Saves a text file on your Desktop listing every file a clean would remove, with sizes. Nothing is deleted, so it is a safe way to see what the default clean does first.</small></div><button class="btn sm line" data-ta="report">Export</button></div>
     <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>${i?.installed ? 'Installed in Program Files' : 'Run from this location'}</b><small>${i?.installed ? 'Uninstall removes the schedule, shortcut, settings and program files. Folders you moved stay linked and keep working.' : 'Install copies Lighten to Program Files, adds a Start menu entry and an Apps entry, and points the schedule at that copy. Needs administrator rights. Without it Lighten runs from where you put it.'}</small></div>${i?.installed ? '<button class="btn sm line" data-ta="uninstall">Uninstall…</button>' : '<button class="btn sm line" data-ta="install">Install…</button>'}</div></div></section>
     ${exclHtml()}`;
 }
 window.hooks = {};
 window.onGo = async (v) => {
-  if (v === 'overview') loadGrowth();
+  if (v === 'overview') { loadGrowth(); loadExtras(); }
   if (v === 'apps' && !S.apps) { S.apps = null; render(); try { S.apps = await invoke('apps_list'); } catch (e) { toast(String(e), true); S.apps = []; } }
   if (v === 'system') { S.sys = null; S.startup = null; render(); loadStartup(); try { S.sys = await invoke('system_info'); } catch (e) { toast(String(e), true); } }
   if (v === 'find' && !S.profile) { try { S.profile = await invoke('profile_dir'); } catch {} }
   if (v !== 'explore' && S.fast) { S.fast = null; invoke('disk_release').catch(() => {}); }
-  if (v === 'settings') { try { S.inst = await invoke('install_state'); } catch {} }
+  if (v === 'settings') { try { [S.inst, S.menu] = await Promise.all([invoke('install_state'), invoke('shell_menu_state')]); } catch {} }
   if (v === 'clean' && S.cleanDrive !== 'C:' && !S.dcats) loadDCats();
 };
 Object.assign(views, { find: vFind, apps: vApps, system: vSystem });
@@ -121,7 +139,8 @@ document.addEventListener('click', async (e) => {
     const k = fa.dataset.fa;
     if (k === 'run') return findRun();
     if (k === 'do') return findDo();
-    if (k === 'all') { (S.find.res || []).forEach((h) => S.find.sel.add(h.path)); return render(); }
+    if (k === 'all') { shownPaths().forEach((p) => S.find.sel.add(p)); return render(); }
+    if (k === 'csv') { try { const p = await invoke('save_csv', { kind: S.find.tab, rows: csvRows() }); toast('Saved ' + p); invoke('reveal_file', { path: p }); } catch (er) { toast(String(er), true); } return; }
     if (k === 'reveal') return invoke('reveal_file', { path: fa.dataset.p });
   }
   const ap = e.target.closest('[data-ap]');
@@ -137,6 +156,7 @@ document.addEventListener('click', async (e) => {
   const ta = e.target.closest('[data-ta]');
   if (ta) {
     const k = ta.dataset.ta;
+    if (k === 'menu') { try { S.menu = await invoke('shell_menu_set', { on: !S.menu }); toast(S.menu ? 'Added to the right-click menu' : 'Removed from the right-click menu'); } catch (er) { toast(String(er), true); } return render(); }
     if (k === 'report') { try { const p = await invoke('export_report'); toast('Saved ' + p); invoke('reveal_file', { path: p }); } catch (er) { toast(String(er), true); } return; }
     if (k === 'install') { try { await invoke('install_app'); } catch (er) { toast(String(er), true); } return; }
     if (k === 'uninstall') {
@@ -161,4 +181,10 @@ document.addEventListener('change', (e) => {
   if (id === 'f_perm') { S.find.perm = e.target.checked; render(); }
   if (id === 'cdrv') { setCleanDrive(e.target.value); }
 });
-document.addEventListener('input', (e) => { if (e.target.id === 'a_q') { S.appq = e.target.value; const pos = e.target.selectionStart; render(); const el = $('#a_q'); el.focus(); el.setSelectionRange(pos, pos); } });
+document.addEventListener('input', (e) => {
+  const id = e.target.id;
+  if (id !== 'a_q' && id !== 'f_q') return;
+  if (id === 'a_q') S.appq = e.target.value; else S.find.q = e.target.value;
+  const pos = e.target.selectionStart; render();
+  const el = $('#' + id); if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+});

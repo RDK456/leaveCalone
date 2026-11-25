@@ -21,4 +21,6 @@ Once you have one, sign the release build before uploading it:
 signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a target\release\lighten.exe
 ```
 
+The release workflow (`.github/workflows/release.yml`) does this automatically once the `AUTHENTICODE_PFX_BASE64` and `AUTHENTICODE_PFX_PASSWORD` repository secrets exist. It only works with a certificate you can export as a `.pfx`; SignPath and Azure Trusted Signing need their own signing step instead.
+
 Re-sign after every build. The delta updater's SHA-256 and ed25519 signature must be generated from the signed file, because signing changes the bytes.

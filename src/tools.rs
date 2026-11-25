@@ -1,5 +1,6 @@
 //! Finders, apps, system tasks, growth history, update signing, installer. Shares helpers with main.rs.
 use super::*;
+use super::more::{log_action, Job};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -54,9 +55,12 @@ pub(crate) fn tail(s: &str, n: usize) -> String {
 
 // ---------- file walking ----------
 const SKIP: &[&str] = &["windows", "$recycle.bin", "system volume information", "program files", "program files (x86)", "programdata", "recovery", "perflogs", "windowsapps", "msocache", ".git", "node_modules"];
-pub(crate) fn walk_files(root: &Path, appdata: bool, f: &mut dyn FnMut(&Path, &fs::Metadata)) {
+pub(crate) fn walk_files(root: &Path, appdata: bool, job: Job, f: &mut dyn FnMut(&Path, &fs::Metadata)) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(d) = stack.pop() {
+        if job.stopped() {
+            return;
+        }
         let Ok(rd) = fs::read_dir(&d) else { continue };
         for e in rd.flatten() {
             let p = e.path();
@@ -71,6 +75,7 @@ pub(crate) fn walk_files(root: &Path, appdata: bool, f: &mut dyn FnMut(&Path, &f
                 }
                 stack.push(p);
             } else {
+                job.tick(1);
                 f(&p, &md);
             }
         }
@@ -97,13 +102,15 @@ pub(crate) fn hit(p: &Path, md: &fs::Metadata) -> FileHit {
 
 #[tauri::command]
 pub async fn find_large(root: String, min_mb: u64) -> Result<Vec<FileHit>, String> {
+    let job = Job::start();
     blocking(move || -> Result<Vec<FileHit>, String> {
         let root = root_ok(&root)?;
         let min = min_mb.max(1) * 1024 * 1024;
         // NTFS master-file-table read when possible (seconds instead of minutes); otherwise walk.
-        let mut v = super::extra::mft_big(&root, min).unwrap_or_else(|| {
+        let mut v = super::extra::mft_big(&root, min, job).unwrap_or_else(|| {
+            job.phase(0);
             let mut v = vec![];
-            walk_files(&root, true, &mut |p, md| {
+            walk_files(&root, true, job, &mut |p, md| {
                 if md.len() >= min {
                     v.push(hit(p, md));
                 }
@@ -112,18 +119,22 @@ pub async fn find_large(root: String, min_mb: u64) -> Result<Vec<FileHit>, Strin
         });
         v.sort_by(|a, b| b.bytes.cmp(&a.bytes));
         v.truncate(200);
+        job.check()?;
         offer(v.iter().map(|h| h.path.clone()));
         Ok(v)
     })
     .await?
 }
 
-fn hash_file(p: &Path, limit: Option<usize>) -> Option<String> {
+fn hash_file(p: &Path, limit: Option<usize>, job: Job) -> Option<String> {
     let mut f = fs::File::open(p).ok()?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
     let mut left = limit.unwrap_or(usize::MAX);
     while left > 0 {
+        if job.stopped() {
+            return None;
+        }
         let want = buf.len().min(left);
         let n = f.read(&mut buf[..want]).ok()?;
         if n == 0 {
@@ -141,27 +152,30 @@ pub struct DupGroup {
 }
 #[tauri::command]
 pub async fn find_dupes(root: String, min_mb: u64) -> Result<Vec<DupGroup>, String> {
+    let job = Job::start();
     blocking(move || -> Result<Vec<DupGroup>, String> {
         let root = root_ok(&root)?;
         let min = min_mb.max(1) * 1024 * 1024;
         let mut by_size: HashMap<u64, Vec<FileHit>> = HashMap::new();
-        walk_files(&root, false, &mut |p, md| {
+        walk_files(&root, false, job, &mut |p, md| {
             if md.len() >= min {
                 by_size.entry(md.len()).or_default().push(hit(p, md));
             }
         });
         let mut out = vec![];
+        job.phase(by_size.values().filter(|v| v.len() > 1).map(|v| v.len() as u64).sum());
         for (size, files) in by_size.into_iter().filter(|(_, v)| v.len() > 1) {
             let mut partial: HashMap<String, Vec<FileHit>> = HashMap::new();
             for f in files {
-                if let Some(h) = hash_file(Path::new(&f.path), Some(65536)) {
+                job.tick(1);
+                if let Some(h) = hash_file(Path::new(&f.path), Some(65536), job) {
                     partial.entry(h).or_default().push(f);
                 }
             }
             for (_, grp) in partial.into_iter().filter(|(_, v)| v.len() > 1) {
                 let mut full: HashMap<String, Vec<FileHit>> = HashMap::new();
                 for f in grp {
-                    if let Some(h) = hash_file(Path::new(&f.path), None) {
+                    if let Some(h) = hash_file(Path::new(&f.path), None, job) {
                         full.entry(h).or_default().push(f);
                     }
                 }
@@ -173,6 +187,7 @@ pub async fn find_dupes(root: String, min_mb: u64) -> Result<Vec<DupGroup>, Stri
         }
         out.sort_by(|a, b| (b.bytes * (b.files.len() as u64 - 1)).cmp(&(a.bytes * (a.files.len() as u64 - 1))));
         out.truncate(100);
+        job.check()?;
         offer(out.iter().flat_map(|g| g.files.iter().map(|f| f.path.clone())));
         Ok(out)
     })
@@ -181,14 +196,15 @@ pub async fn find_dupes(root: String, min_mb: u64) -> Result<Vec<DupGroup>, Stri
 
 #[tauri::command]
 pub async fn find_installers(days: u64) -> Result<Vec<FileHit>, String> {
-    blocking(move || {
+    let job = Job::start();
+    blocking(move || -> Result<Vec<FileHit>, String> {
         let prof = envp("USERPROFILE");
         let cutoff = now().saturating_sub(days * 86400);
         let all = ["iso", "msi", "exe", "msix", "appx", "msixbundle", "appxbundle", "cab"];
         let safe = ["iso", "msi", "msix", "appx", "msixbundle", "appxbundle"];
         let mut v = vec![];
         for (dir, exts) in [("Downloads", &all[..]), ("Desktop", &safe[..]), ("Documents", &safe[..])] {
-            walk_files(&prof.join(dir), false, &mut |p, md| {
+            walk_files(&prof.join(dir), false, job, &mut |p, md| {
                 let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                 if exts.contains(&ext.as_str()) && mtime(md) <= cutoff {
                     v.push(hit(p, md));
@@ -196,10 +212,11 @@ pub async fn find_installers(days: u64) -> Result<Vec<FileHit>, String> {
             });
         }
         v.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        job.check()?;
         offer(v.iter().map(|h| h.path.clone()));
-        v
+        Ok(v)
     })
-    .await
+    .await?
 }
 
 #[derive(Serialize)]
@@ -253,6 +270,7 @@ pub async fn trash_files(paths: Vec<String>, permanent: bool) -> Result<TrashRes
             }
             super::extra::log_trash(&logged); // feeds the Undo list
         }
+        log_action(if permanent { "Deleted files permanently" } else { "Sent files to the Recycle Bin" }, freed, done, permanent);
         Ok(TrashResult { freed, done, failed, recycled: !permanent })
     })
     .await?
@@ -269,11 +287,14 @@ pub struct DevHit {
 }
 #[tauri::command]
 pub async fn find_dev(root: String, days: u64) -> Result<Vec<DevHit>, String> {
+    let job = Job::start();
     blocking(move || -> Result<Vec<DevHit>, String> {
         let root = root_ok(&root)?;
         let mut found: Vec<(PathBuf, &'static str, PathBuf)> = vec![];
         let mut stack = vec![(root, 0u32)];
         while let Some((d, depth)) = stack.pop() {
+            job.check()?;
+            job.tick(1);
             let Ok(rd) = fs::read_dir(&d) else { continue };
             for e in rd.flatten() {
                 let p = e.path();
@@ -312,6 +333,7 @@ pub async fn find_dev(root: String, days: u64) -> Result<Vec<DevHit>, String> {
             }
         }
         out.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        job.check()?;
         offer(out.iter().map(|h| h.path.clone()));
         Ok(out)
     })
@@ -342,6 +364,7 @@ pub async fn delete_dev(paths: Vec<String>) -> Result<DelResult, String> {
             }
             if p.exists() { failed += 1 } else { freed += size; done += 1 }
         }
+        log_action("Deleted dev folders", freed, done, true);
         DelResult { freed, done, failed }
     })
     .await
@@ -641,8 +664,9 @@ fn gb(b: u64) -> String {
 }
 /// A dry run: what a clean would touch, written to a text file. Nothing is deleted.
 #[tauri::command]
-pub async fn export_report() -> Result<String, String> {
-    blocking(|| -> Result<String, String> {
+pub async fn export_report(app: AppHandle) -> Result<String, String> {
+    let dir = super::more::desktop(&app)?;
+    blocking(move || -> Result<String, String> {
         let mut r = format!("Lighten report {}\r\n\r\n", ymd(now()));
         if let Some(c) = drives().iter().find(|d| d.letter.eq_ignore_ascii_case("C:")) {
             r += &format!("C: {} free of {}\r\n\r\n", gb(c.free), gb(c.total));
@@ -655,7 +679,7 @@ pub async fn export_report() -> Result<String, String> {
         for m in load_journal() {
             r += &format!("  {} -> {} ({})\r\n", m.src, m.dest, gb(m.bytes));
         }
-        let path = envp("USERPROFILE").join("Desktop").join(format!("Lighten-report-{}.txt", ymd(now())));
+        let path = dir.join(format!("Lighten-report-{}.txt", ymd(now())));
         fs::write(&path, r).map_err(|e| e.to_string())?;
         Ok(path.to_string_lossy().into())
     })
@@ -744,6 +768,9 @@ pub async fn install_app(app: AppHandle) -> Result<(), String> {
         if !out.ends_with("installed") { return Err(tail(&out, 400)); }
         let st = load_settings();
         let _ = apply_schedule_for(&st, &dst); // re-point the schedule at the installed copy
+        if super::more::menu_on() {
+            let _ = super::more::menu_write(&dst, true);
+        }
         let _ = Command::new(&dst).spawn();
         app.exit(0);
         Ok(())
@@ -757,13 +784,14 @@ pub fn do_uninstall() -> String {
     let in_install = lc(&exe).starts_with(&lc(&dir));
     let ld = lighten_dir();
     let mut script = format!(
-        "schtasks /Delete /TN 'Lighten scan' /F | Out-Null\r\nRemove-Item \"$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Lighten.lnk\" -Force -ErrorAction SilentlyContinue\r\nRemove-Item 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Lighten' -Recurse -Force -ErrorAction SilentlyContinue\r\nforeach($f in 'settings.json','history.json','last-scan.json'){{ Remove-Item (Join-Path '{ld}' $f) -Force -ErrorAction SilentlyContinue }}\r\n",
+        "schtasks /Delete /TN 'Lighten scan' /F | Out-Null\r\nRemove-Item \"$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Lighten.lnk\" -Force -ErrorAction SilentlyContinue\r\nRemove-Item 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Lighten' -Recurse -Force -ErrorAction SilentlyContinue\r\nforeach($f in 'settings.json','history.json','last-scan.json','clean-log.json','hidden.json'){{ Remove-Item (Join-Path '{ld}' $f) -Force -ErrorAction SilentlyContinue }}\r\n",
         ld = q(&ld)
     );
     if in_install {
         script += &format!("Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','Start-Sleep 3; Remove-Item -LiteralPath ''{}'' -Recurse -Force'\r\n", q(&dir));
     }
     let _ = run_ps(&script);
+    let _ = super::more::menu_write(&exe, false);
     "Uninstalled".into()
 }
 #[tauri::command]

@@ -93,7 +93,7 @@ fn empty_folders() {
     }
     set_excl_for_test(&[root.join("ex").to_string_lossy().to_string()]);
     let mut out = vec![];
-    let top = empty_tree(&root, 0, &mut out);
+    let top = empty_tree(&root, 0, super::super::more::Job::start(), &mut out);
     set_excl_for_test(&[]);
     let mut names: Vec<String> = out.iter().map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/")).collect();
     names.sort();
@@ -136,7 +136,7 @@ fn startup_entries_read() {
 #[ignore]
 fn mft_live() {
     let t = std::time::Instant::now();
-    let m = build_mft('C').unwrap();
+    let m = build_mft('C', super::super::more::Job::start()).unwrap();
     let files = m.ents.iter().flatten().filter(|e| !e.dir).count();
     let used = m.tot[5].0;
     let t_rows = format!("{} files, {} bytes in {:?}", files, used, t.elapsed());
@@ -179,7 +179,7 @@ fn recycle_bin_metadata_parses() {
 #[test]
 #[ignore]
 fn mft_top() {
-    let m = build_mft('C').unwrap();
+    let m = build_mft('C', super::super::more::Job::start()).unwrap();
     let mut out = String::new();
     let mut top: Vec<(u64, String)> = m.kids.get(&5).into_iter().flatten().map(|&i| (m.tot[i as usize].0, path_of(&m, i as usize).unwrap_or_default())).collect();
     top.sort_by(|a, b| b.0.cmp(&a.0));
@@ -202,7 +202,7 @@ fn mft_top() {
 #[test]
 #[ignore]
 fn mft_kids() {
-    let m = build_mft('C').unwrap();
+    let m = build_mft('C', super::super::more::Job::start()).unwrap();
     let d = resolve(&m, r"Users\dhanu\AppData\Roaming\1DownloadManager\cache\work").unwrap();
     let mut out = format!("dir {} tot {:?} self attrs {:#x}\n", d, m.tot[d as usize], m.ents[d as usize].as_ref().unwrap().attrs);
     out += &format!("own size field {}\n", m.ents[d as usize].as_ref().unwrap().size);
@@ -216,7 +216,7 @@ fn mft_kids() {
 #[test]
 #[ignore]
 fn mft_gap() {
-    let m = build_mft('C').unwrap();
+    let m = build_mft('C', super::super::more::Job::start()).unwrap();
     let mut out = format!("stats {:?} (sig, in use, base, ext, unreadable) root total {}\n", m.stats, m.tot[5].0);
     let mut all = 0u64;
     let mut orphan = 0u64;
@@ -254,7 +254,7 @@ fn hidden_files_are_found() {
 #[test]
 #[ignore]
 fn hidden_live() {
-    let m = build_mft('C').unwrap();
+    let m = build_mft('C', super::super::more::Job::start()).unwrap();
     let h = find_hidden(&m);
     let out: String = h.iter().map(|x| format!("{} {}\n", x.bytes, x.path)).collect();
     fs::write(std::env::temp_dir().join("lighten-hidden.txt"), format!("{} hidden\n{out}", h.len())).unwrap();
@@ -265,4 +265,24 @@ fn restore_storage_is_read_for_c() {
     let out = "Shadow Copy Storage association\n   For volume: (D:)\n   Used Shadow Copy Storage space: 0 bytes (0%)\n\nShadow Copy Storage association\n   For volume: (C:)\n   Used Shadow Copy Storage space: 3.74 GB (1%)\n";
     assert_eq!(super::super::tools::shadow_used(out), "3.74 GB (1%)");
     assert_eq!(super::super::tools::shadow_used("nothing"), "");
+}
+
+#[test]
+fn clean_leaves_excluded_folders_alone() {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = std::env::temp_dir().join(format!("lighten-excl-clean-{}", now()));
+    fs::create_dir_all(root.join("keep/deep")).unwrap();
+    fs::create_dir_all(root.join("junk")).unwrap();
+    for f in ["keep/deep/a.txt", "junk/b.txt", "c.txt"] {
+        fs::write(root.join(f), b"data").unwrap();
+    }
+    set_excl_for_test(&[root.join("keep").to_string_lossy().to_string()]);
+    let sized = dir_size_skip(&root, 0, excluded);
+    let mut r = CleanResult::default();
+    clean_dir(&root, 0, &mut r);
+    set_excl_for_test(&[]);
+    assert_eq!(sized.files, 2, "excluded files are not counted as cleanable");
+    assert_eq!(r.files, 2);
+    assert!(root.join("keep/deep/a.txt").exists() && !root.join("junk").exists() && !root.join("c.txt").exists());
+    let _ = fs::remove_dir_all(&root);
 }

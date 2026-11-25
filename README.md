@@ -26,7 +26,7 @@ A fast, no-nonsense Windows disk cleaner. Finds junk, big files, duplicates and 
 ## Features
 
 ### Clean
-22 categories: temp files, shader caches, npm/pip/NuGet/Cargo/Yarn/Gradle caches, Chrome/Edge/Brave/Discord/Slack/VS Code caches, thumbnail cache, Windows Update cache, Delivery Optimization, crash dumps, NVIDIA installers, logs and the Recycle Bin. Running apps are detected and skipped.
+30 categories: temp files, shader caches, npm/pip/NuGet/Cargo/Yarn/Gradle caches, Chrome/Edge/Brave/Firefox/Discord/Slack/Teams/Spotify/VS Code caches, Steam, Epic Games and Adobe media caches, thumbnail cache, Windows Update cache, Delivery Optimization, crash dumps, NVIDIA installers, logs and the Recycle Bin. Running apps are detected and skipped.
 
 ![Clean](docs/screenshots/clean.png)
 
@@ -56,6 +56,8 @@ Nine finders in one place:
 - **Undo**: restore anything Lighten sent to the Recycle Bin
 
 Deletes go to the **Recycle Bin first**. Permanent delete is opt-in.
+
+Search and sort the results, export them to CSV, and watch or cancel long scans.
 
 ![Find](docs/screenshots/find.png)
 
@@ -92,8 +94,10 @@ See everything you moved, its status, and restore it. Track free space over time
 - Free-space drop alert: a banner and notification when C: loses 10 GB or more, with what grew
 - Hidden-space check: Fast scan flags large files the disk lists but Windows cannot find, with a one-click disk check (`chkdsk /f`) scheduled for the next restart
 - Every setting has a plain-language explanation
+- Recent cleanups: what was cleaned, deleted or moved, and when
+- Explorer right-click: "Analyze with Lighten" on any folder or drive
 - Ask box: type a problem ("C: is full", "protect a folder") and it opens the page or setting that fixes it; works offline, keyword-based
-- Command line: `Lighten.exe --scan`, `--clean`, `--version`, `--help` (output shows when launched from an elevated terminal)
+- Command line: `Lighten.exe --scan`, `--clean`, `--version`, `--help` `--analyze <folder>` (output shows when launched from an elevated terminal)
 - Signed delta updater (ed25519 + SHA-256, small binary patches)
 
 ![Settings](docs/screenshots/settings.png)
@@ -105,7 +109,7 @@ See everything you moved, its status, and restore it. Track free space over time
 - System, Microsoft and other protected folders are on a deny list and can't be moved.
 - Reparse points are never followed during scans or deletes.
 - Running processes and services that use a folder block its move.
-- Excluded folders are skipped by every finder and by Move.
+- Excluded folders are skipped by every finder, by Clean and by Move. (Windows system tasks and emptying the Recycle Bin do not read the list.)
 - Recycle Bin deletes are logged, so Undo can put them back.
 - OneDrive "free up space" only touches synced placeholders; files not yet uploaded are refused.
 - Empty folders are only removed if they are still empty at that moment.
@@ -133,6 +137,16 @@ The UI is plain HTML/CSS/JS in `dist/`. No bundler.
 Tests: `cargo test` (set `__COMPAT_LAYER=RunAsInvoker` to run the test binary without an elevation prompt). The live NTFS check needs an elevated terminal: `cargo test mft_live -- --ignored`.
 
 Code signing and a winget package are documented in [docs/SIGNING.md](docs/SIGNING.md) and [winget/make-manifest.ps1](winget/make-manifest.ps1).
+
+### Releasing
+
+Push a tag that matches the version in `Cargo.toml`. GitHub Actions tests, builds and creates a **draft** release for you to publish. Add the optional secrets named at the top of the workflow file to include the signed update manifest and a code signature. To build the manifest by hand:
+
+```powershell
+.\scripts\make-latest.ps1 -Exe .\Lighten.exe -Version 0.1.2 -KeyFile .\keys\update.key
+```
+
+The app looks for `latest.json` on the newest release unless you set another address, so upload it with every release.
 
 ### Updater and signing
 

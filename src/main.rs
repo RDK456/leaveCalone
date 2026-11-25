@@ -4,6 +4,7 @@
 //! - Moving copies, verifies counts+bytes, renames the original aside, links, verifies, and only then deletes. Every step rolls back.
 
 mod extra;
+mod more;
 mod tools;
 use serde::{Deserialize, Serialize};
 use std::os::windows::{fs::MetadataExt, process::CommandExt};
@@ -44,6 +45,10 @@ struct Sz {
 }
 /// Sums files under `root`; reparse points are counted, never entered. Files younger than `min_age` secs are ignored.
 fn dir_size(root: &Path, min_age: u64) -> Sz {
+    dir_size_skip(root, min_age, |_| false)
+}
+/// Like `dir_size`, leaving out anything `skip` matches. Moves must use `dir_size`, which never skips.
+fn dir_size_skip(root: &Path, min_age: u64, skip: fn(&Path) -> bool) -> Sz {
     let mut t = Sz::default();
     let n = SystemTime::now();
     let mut stack = vec![root.to_path_buf()];
@@ -52,6 +57,9 @@ fn dir_size(root: &Path, min_age: u64) -> Sz {
         for e in rd.flatten() {
             let p = e.path();
             let Ok(md) = fs::symlink_metadata(&p) else { continue };
+            if skip(&p) {
+                continue;
+            }
             if is_reparse(&md) {
                 t.links += 1;
             } else if md.is_dir() {
@@ -73,13 +81,16 @@ fn dir_size(root: &Path, min_age: u64) -> Sz {
 }
 /// Sizes many dirs in parallel (bounded).
 fn sizes_parallel(paths: &[PathBuf], min_age: u64) -> Vec<Sz> {
+    sizes_parallel_skip(paths, min_age, |_| false)
+}
+fn sizes_parallel_skip(paths: &[PathBuf], min_age: u64, skip: fn(&Path) -> bool) -> Vec<Sz> {
     let mut out = vec![Sz::default(); paths.len()];
     let chunk = (paths.len() / 8).max(1);
     std::thread::scope(|s| {
         for (ps, os) in paths.chunks(chunk).zip(out.chunks_mut(chunk)) {
             s.spawn(move || {
                 for (p, o) in ps.iter().zip(os.iter_mut()) {
-                    *o = dir_size(p, min_age);
+                    *o = dir_size_skip(p, min_age, skip);
                 }
             });
         }
@@ -165,13 +176,54 @@ fn browser_roots(base: PathBuf) -> Vec<PathBuf> {
     }
     v
 }
+/// Cache folders of every Chromium-style profile directly under `base`, whatever the profile is called.
+fn webview_roots(base: PathBuf) -> Vec<PathBuf> {
+    let mut v = vec![];
+    if let Ok(rd) = fs::read_dir(&base) {
+        for e in rd.flatten() {
+            for s in ["Cache", "Code Cache", "GPUCache"] {
+                let p = e.path().join(s);
+                if p.is_dir() {
+                    v.push(p);
+                }
+            }
+        }
+    }
+    v
+}
+/// `sub` folders inside every Firefox profile.
+fn profile_subdirs(base: PathBuf, subs: &[&str]) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(&base) else { return vec![] };
+    rd.flatten().flat_map(|e| subs.iter().map(move |s| e.path().join(s))).filter(|p| p.is_dir()).collect()
+}
+/// Direct subfolders of `base` whose name starts with `prefix`.
+fn prefix_dirs(base: PathBuf, prefix: &str) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(&base) else { return vec![] };
+    rd.flatten().filter(|e| e.file_name().to_string_lossy().to_lowercase().starts_with(prefix)).map(|e| e.path()).filter(|p| p.is_dir()).collect()
+}
 fn cats() -> Vec<Cat> {
     let local = envp("LOCALAPPDATA");
     let prof = envp("USERPROFILE");
     let win = envp("SystemRoot");
     let pd = envp("ProgramData");
     let roam = envp("APPDATA");
+    let pf86 = envp("ProgramFiles(x86)");
+    let steam = pf86.join("Steam");
+    let msteams = local.join(r"Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView");
+    let mut teams = webview_roots(msteams);
+    teams.extend([r"Microsoft\Teams\Cache", r"Microsoft\Teams\Code Cache", r"Microsoft\Teams\GPUCache"].map(|s| roam.join(s)));
+    // Spotify keeps downloaded songs under Data and Storage, so only its web view caches are listed
+    let spotify = [local.join(r"Spotify\Browser"), local.join(r"Packages\SpotifyAB.SpotifyMusic_zpdnekdrzrea0\LocalCache\Spotify\Browser")]
+        .iter()
+        .flat_map(|b| ["Cache", "Code Cache", "GPUCache"].map(|s| b.join(s)))
+        .collect();
     vec![
+        Cat { id: "firefox", name: "Firefox cache", desc: "Cached pages and startup data. Logins, bookmarks and history are untouched.", roots: profile_subdirs(local.join(r"Mozilla\Firefox\Profiles"), &["cache2", "startupCache"]), min_age: 0, admin: false, procs: &["firefox"], default_on: false },
+        Cat { id: "steam", name: "Steam caches", desc: "Store pages, web cache and game shader caches. Games and saves are untouched; shaders are rebuilt.", roots: vec![local.join(r"Steam\htmlcache"), steam.join(r"appcache\httpcache"), steam.join(r"steamapps\shadercache")], min_age: 0, admin: false, procs: &["steam", "steamwebhelper"], default_on: false },
+        Cat { id: "epic", name: "Epic Games Launcher cache", desc: "The launcher's web cache. Games are untouched; you may have to sign in again.", roots: prefix_dirs(local.join(r"EpicGamesLauncher\Saved"), "webcache"), min_age: 0, admin: false, procs: &["epicgameslauncher"], default_on: false },
+        Cat { id: "teams", name: "Teams cache", desc: "Cached images and code for new and classic Teams. Chats stay in the cloud.", roots: teams, min_age: 0, admin: false, procs: &["teams", "ms-teams"], default_on: false },
+        Cat { id: "spotify", name: "Spotify web cache", desc: "Cached artwork and pages. Downloaded songs are untouched.", roots: spotify, min_age: 0, admin: false, procs: &["spotify"], default_on: false },
+        Cat { id: "adobe", name: "Adobe media cache", desc: "Preview and waveform files Premiere and After Effects rebuild from your footage. Projects are untouched; reopening them is slower once.", roots: vec![roam.join(r"Adobe\Common\Media Cache Files"), roam.join(r"Adobe\Common\Media Cache"), roam.join(r"Adobe\Common\Peak Files")], min_age: 0, admin: false, procs: &["adobe premiere pro", "afterfx", "adobe media encoder", "adobe audition"], default_on: false },
         Cat { id: "nvupd", name: "NVIDIA App update downloads", desc: "Installer packages the NVIDIA App keeps. Re-downloaded unless you turn off its auto-update.", roots: vec![pd.join(r"NVIDIA Corporation\NVIDIA App\UpdateFramework")], min_age: 0, admin: false, procs: &[], default_on: true },
         Cat { id: "discord", name: "Discord cache", desc: "Cached images and code. Your login and messages are untouched.", roots: vec![roam.join(r"discord\Cache"), roam.join(r"discord\Code Cache"), roam.join(r"discord\GPUCache")], min_age: 0, admin: false, procs: &["discord"], default_on: false },
         Cat { id: "store", name: "Microsoft Store cache", desc: "Store app cache. Rebuilt automatically.", roots: vec![local.join(r"Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalCache")], min_age: 0, admin: false, procs: &["winstore.app"], default_on: true },
@@ -229,7 +281,7 @@ fn drive_cats(l: char) -> Vec<CatInfo> {
     for (id, rel) in [("dtemp", "Temp"), ("dtmp", "tmp")] {
         let p = PathBuf::from(format!("{l}:\\{rel}"));
         if p.is_dir() {
-            let s = dir_size(&p, 3600);
+            let s = dir_size_skip(&p, 3600, extra::excluded);
             v.push(CatInfo { id: id.into(), name: format!("{l}:\\{rel}"), desc: "Temporary files older than an hour.".into(), bytes: s.bytes, files: s.files, admin: false, busy: None, default_on: true });
         }
     }
@@ -267,8 +319,8 @@ fn scan_cats(drive: &str) -> Vec<CatInfo> {
         let cs = cats();
         let mut out: Vec<CatInfo> = vec![];
         for c in &cs {
-            let existing: Vec<PathBuf> = c.roots.iter().filter(|r| r.is_dir()).cloned().collect();
-            let sz = sizes_parallel(&existing, c.min_age);
+            let existing: Vec<PathBuf> = c.roots.iter().filter(|r| r.is_dir() && !extra::excluded(r)).cloned().collect();
+            let sz = sizes_parallel_skip(&existing, c.min_age, extra::excluded);
             out.push(CatInfo {
                 id: c.id.into(), name: c.name.into(), desc: c.desc.into(),
                 bytes: sz.iter().map(|s| s.bytes).sum(), files: sz.iter().map(|s| s.files).sum(),
@@ -294,16 +346,24 @@ struct CleanResult {
     note: Option<String>,
 }
 fn clean_dir(dir: &Path, min_age: u64, r: &mut CleanResult) {
+    if extra::excluded(dir) {
+        r.skipped += 1;
+        return;
+    }
     let Ok(rd) = fs::read_dir(dir) else { return };
     let n = SystemTime::now();
     for e in rd.flatten() {
         let p = e.path();
         let Ok(md) = fs::symlink_metadata(&p) else { continue };
-        if is_reparse(&md) {
+        if extra::excluded(&p) {
+            r.skipped += 1;
+        } else if is_reparse(&md) {
             r.skipped += 1; // never follow or delete links
         } else if md.is_dir() {
             clean_dir(&p, min_age, r);
-            let _ = fs::remove_dir(&p); // only succeeds when empty
+            if !extra::excluded(&p) {
+                let _ = fs::remove_dir(&p); // only succeeds when empty
+            }
         } else {
             if min_age > 0 {
                 if let Ok(m) = md.modified() {
@@ -328,6 +388,12 @@ fn clean_dir(dir: &Path, min_age: u64, r: &mut CleanResult) {
     }
 }
 fn do_clean(ids: Vec<String>, drive: &str) -> Vec<CleanResult> {
+    let out = do_clean_inner(ids, drive);
+    let where_ = if drive.trim().is_empty() { "C:" } else { drive.trim() };
+    more::log_action(&format!("Cleaned {where_}"), out.iter().map(|r| r.freed).sum(), out.iter().map(|r| r.files).sum(), true);
+    out
+}
+fn do_clean_inner(ids: Vec<String>, drive: &str) -> Vec<CleanResult> {
     if !drive.trim().is_empty() {
         match drive_letter(drive) { Some(l) if l != 'C' => return clean_drive(l, ids), Some(_) => {}, None => return vec![] }
     }
@@ -633,6 +699,7 @@ async fn move_folder(app: AppHandle, src: String, drive: String) -> Result<MoveR
         let leftover = fs::remove_dir_all(&old).is_err() && old.exists();
 
         let rec = MoveRec { src: p.src, dest: p.dest, bytes: before.bytes, when: now() };
+        more::log_action(&format!("Moved {} to {}", rec.src, rec.dest), before.bytes, before.files, true);
         let mut j = load_journal();
         j.push(rec.clone());
         save_journal(&j)?;
@@ -894,6 +961,7 @@ const HELP: &str = "Lighten command line (run from an elevated terminal to see o
   --scan      scan, record history, notify
   --clean     scan, then clean the default safe set
   --version   print the version
+  --analyze <folder>  open the app on that folder
   --uninstall remove schedule, shortcut and settings";
 
 // ---------- delta updater ----------
@@ -932,12 +1000,16 @@ fn fetch(src: &str) -> Result<Vec<u8>, String> {
         fs::read(src).map_err(|e| format!("Cannot read {src}: {e}"))
     }
 }
+const UPDATE_URL: &str = "https://github.com/RDK456/leaveCalone/releases/latest/download/latest.json";
+/// An empty setting means the official releases. Nothing is fetched until the user asks.
+fn update_source(setting: &str) -> &str {
+    if setting.trim().is_empty() { UPDATE_URL } else { setting.trim() }
+}
 fn manifest() -> Result<Manifest, String> {
-    let url = load_settings().update_url;
-    if url.is_empty() {
-        return Err("Set an update URL in Settings first".into());
-    }
-    let m: Manifest = serde_json::from_slice(&fetch(&url)?).map_err(|e| format!("Bad update manifest: {e}"))?;
+    let saved = load_settings().update_url;
+    let url = update_source(&saved);
+    let body = fetch(url).map_err(|e| if url == UPDATE_URL && e.contains("404") { "No update information is published yet".to_string() } else { e })?;
+    let m: Manifest = serde_json::from_slice(&body).map_err(|e| format!("Bad update manifest: {e}"))?;
     tools::verify_signature(&m.version, &m.full.sha256, &m.signature)?;
     Ok(m)
 }
@@ -1071,7 +1143,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![drives, scan_clean, clean, list_dir, move_candidates, plan_move, move_folder, moved_list, move_back, admin_task, open_in_explorer, find_links, adopt_link, get_settings, save_settings, last_scan, app_info, check_update, apply_update,
             tools::find_large, tools::find_dupes, tools::find_installers, tools::trash_files, tools::find_dev, tools::delete_dev, tools::reveal_file, tools::system_info, tools::system_task, tools::apps_list, tools::uninstall_app, tools::snapshot, tools::growth, tools::export_report, tools::install_state, tools::install_app, tools::uninstall_self,
-            extra::disk_scan, extra::fast_dir, extra::disk_release, extra::onedrive_scan, extra::onedrive_free, extra::trash_log, extra::restore_trashed, extra::find_empty, extra::delete_empty, extra::find_shortcuts, extra::find_similar, extra::startup_list, extra::startup_set, extra::winsxs_analyze, extra::set_exclusions, extra::profile_dir, extra::hidden_space, extra::schedule_chkdsk])
+            extra::disk_scan, extra::fast_dir, extra::disk_release, extra::onedrive_scan, extra::onedrive_free, extra::trash_log, extra::restore_trashed, extra::find_empty, extra::delete_empty, extra::find_shortcuts, extra::find_similar, extra::startup_list, extra::startup_set, extra::winsxs_analyze, extra::set_exclusions, extra::profile_dir, extra::hidden_space, extra::schedule_chkdsk,
+            more::cancel_scan, more::scan_progress, more::clean_history, more::save_csv, more::last_hidden, more::shell_menu_state, more::shell_menu_set, more::launch_path])
         .run(tauri::generate_context!())
         .expect("failed to start Lighten");
 }

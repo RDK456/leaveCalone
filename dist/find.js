@@ -13,7 +13,7 @@ const FNOTE = {
   onedrive: 'Files that are on this PC and in your cloud. Freeing space keeps them in OneDrive and downloads them again when opened. Files not yet uploaded are refused.',
   undo: 'Files Lighten sent to the Recycle Bin that are still in it (emptied ones are not listed). Restore puts them back where they were.',
 };
-S.find = { tab: 'large', root: 'C:\\Users', min: 100, days: 90, dist: 4, cap: 6000, res: null, busy: false, sel: new Set(), size: new Map(), perm: false, roots: [] };
+S.find = { q: '', run: 0, tab: 'large', root: 'C:\\Users', min: 100, days: 90, dist: 4, cap: 6000, res: null, busy: false, sel: new Set(), size: new Map(), perm: false, roots: [] };
 S.profile = null;
 const isGrp = () => S.find.tab === 'dupes' || S.find.tab === 'photos';
 
@@ -25,37 +25,66 @@ function findTab(k) {
   else if (k === 'photos') f.root = prof + '\\Pictures';
   else if (k === 'empty') f.root = prof;
   else if (['large', 'dupes'].includes(k) && f.root.toLowerCase().endsWith('\\pictures')) f.root = 'C:\\Users';
-  Object.assign(f, { tab: k, res: null, sel: new Set(), size: new Map(), busy: false });
+  if (f.busy) { invoke('cancel_scan'); unwatchScan(); } // leaving a running scan stops it
+  f.run++;
+  Object.assign(f, { tab: k, res: null, sel: new Set(), size: new Map(), busy: false, q: '' });
+  S.sorts.find = null;
   render();
   if (FAUTO.includes(k)) findRun();
+}
+const matches = (h, q) => `${h.path} ${h.target || ''}`.toLowerCase().includes(q);
+/** What is on screen: the search filter, then the column sort. A matching group is shown whole, so a kept copy stays visible. */
+function shownRows() {
+  const f = S.find, q = f.q.trim().toLowerCase(), rows = f.res || [];
+  if (isGrp()) return q ? rows.filter((g) => g.files.some((h) => matches(h, q))) : rows;
+  return sortRows(q ? rows.filter((h) => matches(h, q)) : rows, S.sorts.find);
+}
+const shownPaths = () => (isGrp() ? shownRows().flatMap((g) => g.files) : shownRows()).map((h) => h.path);
+function hiddenSelected() {
+  const seen = new Set(shownPaths());
+  return [...S.find.sel].filter((p) => !seen.has(p)).length;
+}
+function csvRows() {
+  const day = (s) => (s ? new Date(s * 1000).toISOString().slice(0, 10) : '');
+  if (isGrp()) return [['Set', 'Name', 'Path', 'Bytes', 'Modified'], ...shownRows().flatMap((g, i) => g.files.map((h) => [String(i + 1), h.name, h.path, String(h.bytes), day(h.modified)]))];
+  if (S.find.tab === 'dev') return [['Kind', 'Project', 'Path', 'Bytes', 'Idle days'], ...shownRows().map((h) => [h.kind, h.project, h.path, String(h.bytes), String(h.idle_days)])];
+  return [['Name', 'Path', 'Bytes', 'Modified', 'Target'], ...shownRows().map((h) => [h.name, h.path, String(h.bytes ?? 0), day(h.modified), h.target || ''])];
+}
+function colHead() {
+  const f = S.find;
+  if (f.tab === 'dev') return `<div class="row h" style="grid-template-columns:24px 1fr 110px 100px 90px"><span></span>${sortBtn('find', 'project', 'Project')}${sortBtn('find', 'idle_days', 'Idle', true)}${sortBtn('find', 'bytes', 'Size', true)}<span></span></div>`;
+  const sized = !['empty', 'shortcuts'].includes(f.tab);
+  return `<div class="row h" style="grid-template-columns:24px 1fr 100px 110px 70px"><span></span>${sortBtn('find', 'name', 'Name')}${sortBtn('find', 'modified', f.tab === 'undo' ? 'Deleted' : 'Modified', true)}${sized ? sortBtn('find', 'bytes', 'Size', true) : '<span></span>'}<span></span></div>`;
 }
 function vFind() {
   const f = S.find, cfg = FCFG[f.tab];
   const tabs = Object.entries(FT).map(([k, v]) => `<button class="tab ${f.tab === k ? 'on' : ''}" data-ft="${k}"${f.tab === k ? ' aria-current="true"' : ''}>${v}</button>`).join('');
   const roots = driveRoots().map((r) => `<option value="${esc(r)}">`).join('');
-  const bar = `<div class="bar2">${cfg.includes('root') ? `<input class="t" id="f_root" list="roots" value="${esc(f.root)}" style="width:300px" aria-label="Folder to scan"><datalist id="roots">${roots}</datalist>` : ''}
+  const bar = `<div class="bar2">${cfg.includes('root') ? `<input class="t" id="f_root" list="roots" value="${esc(f.root)}" style="width:240px" aria-label="Folder to scan"><datalist id="roots">${roots}</datalist>` : ''}
     ${cfg.includes('min') ? `<select id="f_min" aria-label="Minimum size">${[10, 100, 500, 1000].map((m) => `<option value="${m}" ${f.min === m ? 'selected' : ''}>Over ${m >= 1000 ? '1 GB' : m + ' MB'}</option>`).join('')}</select>` : ''}
     ${cfg.includes('days') ? `<select id="f_days" aria-label="Older than">${[30, 60, 90, 180, 365].map((d) => `<option value="${d}" ${f.days === d ? 'selected' : ''}>${f.tab === 'dev' ? 'Idle' : 'Older than'} ${d} days</option>`).join('')}</select>` : ''}
     ${cfg.includes('dist') ? `<select id="f_dist" aria-label="How alike"><option value="4" ${f.dist === 4 ? 'selected' : ''}>Near-identical</option><option value="8" ${f.dist === 8 ? 'selected' : ''}>Similar</option></select>` : ''}
     ${cfg.includes('cap') ? `<select id="f_cap" aria-label="How many photos to check">${[6000, 20000, 50000, 100000].map((c) => `<option value="${c}" ${f.cap === c ? 'selected' : ''}>Check up to ${c.toLocaleString()}</option>`).join('')}</select>` : ''}
+    ${f.res?.length ? `<input class="t" id="f_q" type="search" placeholder="Search results" aria-label="Search results" value="${esc(f.q)}" style="width:200px">` : ''}
     <button class="btn pri" data-fa="run" ${f.busy ? 'disabled' : ''}>${f.busy ? 'Scanning…' : FAUTO.includes(f.tab) ? 'Rescan' : 'Scan'}</button>
-    ${['empty', 'onedrive', 'undo'].includes(f.tab) && f.res?.length ? '<button class="btn line" data-fa="all">Select all</button>' : ''}</div>`;
+    ${['empty', 'onedrive', 'undo'].includes(f.tab) && f.res?.length ? '<button class="btn line" data-fa="all">Select all</button>' : ''}${f.res?.length ? '<button class="btn line" data-fa="csv">Export CSV</button>' : ''}</div>`;
   let body = '';
-  const rows = f.res;
-  if (rows === null) body = `<div class="card"><div class="empty">${f.busy ? 'Scanning, this can take a minute…' : 'Choose options and press Scan.'}</div></div>`;
+  const rows = f.res === null ? null : shownRows();
+  if (rows === null) body = `<div class="card"><div class="empty">${f.busy ? 'Scanning, this can take a minute…' + (['shortcuts', 'undo'].includes(f.tab) ? '' : progressHtml()) : 'Choose options and press Scan.'}</div></div>`;
+  else if (f.res.length && !rows.length) body = '<div class="card"><div class="empty">No result matches your search.</div></div>';
   else if (!rows.length) body = `<div class="card"><div class="empty">${f.tab === 'onedrive' && !f.roots.length ? 'OneDrive was not found on this PC.' : 'Nothing found.'}</div></div>`;
   else if (isGrp()) {
     const label = f.tab === 'photos' ? (g) => `${g.files.length} similar photos · largest ${txt(g.bytes)} · ${txt(g.files.slice(1).reduce((a, h) => a + h.bytes, 0))} reclaimable` : (g) => `${g.files.length} copies · ${txt(g.bytes)} each · ${txt(g.bytes * (g.files.length - 1))} wasted`;
     body = `<div class="card">${rows.map((g) => `<div class="grp">${label(g)}</div>${g.files.map((h) => fileRow(h)).join('')}`).join('')}</div>`;
   } else if (f.tab === 'dev') {
-    body = `<div class="card">${rows.map((h) => `<div class="row" style="grid-template-columns:24px 1fr 110px 100px 90px"><input type="checkbox" data-fp="${esc(h.path)}" aria-label="${esc(h.project)}" ${f.sel.has(h.path) ? 'checked' : ''}><div class="n"><b>${esc(h.project)}</b><small>${esc(h.kind)} · ${esc(h.path)}</small></div><div class="r mut">idle ${h.idle_days} d</div><div class="r">${fmt(h.bytes)}</div><div class="r"><button class="btn sm line" data-fa="reveal" data-p="${esc(h.path)}">Show</button></div></div>`).join('')}</div>`;
-  } else body = `<div class="card">${rows.map((h) => fileRow(h)).join('')}</div>`;
+    body = `<div class="card">${colHead()}${rows.map((h) => `<div class="row" style="grid-template-columns:24px 1fr 110px 100px 90px"><input type="checkbox" data-fp="${esc(h.path)}" aria-label="${esc(h.project)}" ${f.sel.has(h.path) ? 'checked' : ''}><div class="n"><b>${esc(h.project)}</b><small>${esc(h.kind)} · ${esc(h.path)}</small></div><div class="r mut">idle ${h.idle_days} d</div><div class="r">${fmt(h.bytes)}</div><div class="r"><button class="btn sm line" data-fa="reveal" data-p="${esc(h.path)}">Show</button></div></div>`).join('')}</div>`;
+  } else body = `<div class="card">${colHead()}${rows.map((h) => fileRow(h)).join('')}</div>`;
   const sb = [...f.sel].reduce((a, p) => a + (f.size.get(p) || 0), 0);
   const act = { dev: 'Delete folders', empty: 'Remove folders', onedrive: 'Free up space', undo: 'Restore' }[f.tab] || (f.perm ? 'Delete permanently' : 'Move to Recycle Bin');
   const permOk = !['dev', 'empty', 'onedrive', 'undo'].includes(f.tab);
   const sized = !['empty', 'shortcuts', 'undo'].includes(f.tab);
   return `<div class="wrap">${head('Find files', FNOTE[f.tab])}<div class="tabs">${tabs}</div>${bar}${body}</div>
-    <div class="bottom"><div class="wrap"><span>Selected <b>${f.sel.size}</b>${sized ? ` · <b>${txt(sb)}</b>` : ''}${permOk ? ` <label style="margin-left:16px"><input type="checkbox" id="f_perm" ${f.perm ? 'checked' : ''}> Delete permanently</label>` : ''}</span><button class="btn pri" data-fa="do" ${f.sel.size ? '' : 'disabled'}>${act}</button></div></div>`;
+    <div class="bottom"><div class="wrap"><span>Selected <b>${f.sel.size}</b>${sized ? ` · <b>${txt(sb)}</b>` : ''}${f.q && hiddenSelected() ? ` <span class="pill warn">${hiddenSelected()} hidden by search</span>` : ''}${permOk ? ` <label style="margin-left:16px"><input type="checkbox" id="f_perm" ${f.perm ? 'checked' : ''}> Delete permanently</label>` : ''}</span><button class="btn pri" data-fa="do" ${f.sel.size ? '' : 'disabled'}>${act}</button></div></div>`;
 }
 function fileRow(h) {
   const f = S.find;
@@ -65,9 +94,10 @@ function fileRow(h) {
 }
 async function findRun() {
   const f = S.find;
+  f.q = ''; S.sorts.find = null;
   f.root = $('#f_root')?.value ?? f.root; f.min = +($('#f_min')?.value ?? f.min); f.days = +($('#f_days')?.value ?? f.days); f.dist = +($('#f_dist')?.value ?? f.dist); f.cap = +($('#f_cap')?.value ?? f.cap);
-  const tab = f.tab;
-  f.busy = true; f.res = null; f.sel = new Set(); f.size = new Map(); render();
+  const tab = f.tab, run = ++f.run; // a later run or a tab switch makes this one stale
+  f.busy = true; f.res = null; f.sel = new Set(); f.size = new Map(); render(); watchScan();
   try {
     let res;
     if (tab === 'large') res = await invoke('find_large', { root: f.root, minMb: f.min });
@@ -79,14 +109,16 @@ async function findRun() {
     else if (tab === 'shortcuts') res = await invoke('find_shortcuts');
     else if (tab === 'onedrive') { const o = await invoke('onedrive_scan'); f.roots = o.roots; res = o.files; }
     else res = (await invoke('trash_log')).map((t) => ({ path: t.path, name: t.path.split('\\').pop(), bytes: t.bytes, modified: t.when }));
-    if (f.tab !== tab) return; // the user switched tabs while this ran
+    if (f.run !== run) return;
     f.res = res;
     const flat = isGrp() ? res.flatMap((g) => g.files) : res;
     flat.forEach((h) => f.size.set(h.path, h.bytes));
     if (['installers', 'dev', 'shortcuts'].includes(tab)) flat.forEach((h) => f.sel.add(h.path));
     if (isGrp()) res.forEach((g) => g.files.slice(1).forEach((h) => f.sel.add(h.path)));
-  } catch (e) { toast(String(e), true); if (f.tab === tab) f.res = []; }
-  if (f.tab === tab) { f.busy = false; render(); }
+  } catch (e) {
+    if (isCancel(e)) toast('Scan cancelled'); else { toast(String(e), true); if (f.run === run) f.res = []; }
+  }
+  if (f.run === run) { unwatchScan(); f.busy = false; render(); }
 }
 function findDo() {
   const f = S.find, paths = [...f.sel], sb = paths.reduce((a, p) => a + (f.size.get(p) || 0), 0), t = f.tab;
@@ -100,8 +132,10 @@ function findDo() {
     trash: [perm ? 'Permanently delete' : 'Move to Recycle Bin', perm ? 'Permanent. This cannot be undone.' : ''],
   }[kind];
   const showSize = !['empty', 'shortcuts', 'undo'].includes(t);
+  const unseen = hiddenSelected();
   openDlg(`<h3>${T[0]} ${paths.length} item(s)${showSize ? ', ' + txt(sb) : ''}?</h3>
     <ul>${paths.slice(0, 6).map((p) => `<li style="word-break:break-all">${esc(p)}</li>`).join('')}${paths.length > 6 ? `<li>and ${paths.length - 6} more</li>` : ''}</ul>
+    ${unseen ? `<div class="problems">${unseen} of these are hidden by your search and are included.</div>` : ''}
     ${kind === 'dev' || perm ? `<div class="problems">${esc(T[1])}</div>` : `<p class="mut">${kind === 'trash' ? 'You can restore them from the Recycle Bin, or from Undo here. Space is freed when it is emptied.' : esc(T[1])}</p>`}
     <div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">${T[0].replace(' on', '')}</button></div>`);
   $('#go').onclick = async () => {

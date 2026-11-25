@@ -56,17 +56,21 @@ document.addEventListener('click', async (e) => {
   if (a.dataset.a === 'expmode') { S.expMode = S.expMode === 'map' ? 'list' : 'map'; return render(); }
   if (a.dataset.a === 'fastscan') {
     const d = a.dataset.p;
-    openDlg(`<h3>Scanning ${esc(d)}</h3><p class="mut">Reading the NTFS file table. This takes a few seconds to a minute.</p>`); dlg.dataset.lock = '1';
+    openDlg(`<h3>Scanning ${esc(d)}</h3><p class="mut">Reading the NTFS file table. This takes a few seconds to a minute.</p>${progressHtml()}`); dlg.dataset.lock = '1';
+    watchScan();
     try {
       const r = await invoke('disk_scan', { drive: d });
-      delete dlg.dataset.lock; dlg.close();
+      unwatchScan(); delete dlg.dataset.lock; dlg.close();
       S.fast = d.toUpperCase();
       toast(`${r.files.toLocaleString()} files in ${r.secs}s, ${txt(r.bytes)} used`);
       S.hidden = null; invoke('hidden_space').then((h) => { S.hidden = h; if (cur === 'explore') render(); }).catch(() => {});
       loadExplore(d + '\\');
-    } catch (er) { delete dlg.dataset.lock; openDlg(`<h3>Fast scan unavailable</h3><div class="problems">${esc(er)}</div><p class="mut">Open the drive normally to scan it folder by folder.</p><div class="foot"><button class="btn pri" data-close>Close</button></div>`); }
+    } catch (er) { unwatchScan(); delete dlg.dataset.lock; if (isCancel(er)) { dlg.close(); return toast('Scan cancelled'); } openDlg(`<h3>Fast scan unavailable</h3><div class="problems">${esc(er)}</div><p class="mut">Open the drive normally to scan it folder by folder.</p><div class="foot"><button class="btn pri" data-close>Close</button></div>`); }
   }
 });
+
+// Escape closes a dialog even while it is locked; a fast scan left behind would keep running unseen.
+document.querySelector('#dlg').addEventListener('cancel', () => { if (document.querySelector('#dlg [data-cancel]')) invoke('cancel_scan'); });
 
 // ---------- system: WinSxS and startup apps ----------
 function winsxsRow() {

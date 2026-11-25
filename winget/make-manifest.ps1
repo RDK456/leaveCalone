@@ -1,12 +1,16 @@
 # Builds winget manifests for a published release, then you submit them to microsoft/winget-pkgs.
 #   .\make-manifest.ps1 -Version 0.1.0
+#   .\make-manifest.ps1 -Version 0.1.0 -File ..\Lighten.exe   (hash a local copy of the exact release asset)
 # Needs the release asset to exist: https://github.com/RDK456/leaveCalone/releases/download/v<Version>/Lighten.exe
-param([Parameter(Mandatory)][string]$Version)
+param([Parameter(Mandatory)][string]$Version, [string]$File)
 $ErrorActionPreference = 'Stop'
 $id = 'RDK456.Lighten'
 $url = "https://github.com/RDK456/leaveCalone/releases/download/v$Version/Lighten.exe"
-$tmp = Join-Path $env:TEMP "Lighten-$Version.exe"
-Invoke-WebRequest $url -OutFile $tmp
+if ($File) { $tmp = (Resolve-Path $File).Path }
+else {
+    $tmp = Join-Path $env:TEMP "Lighten-$Version.exe"
+    Invoke-WebRequest $url -OutFile $tmp
+}
 $sha = (Get-FileHash $tmp -Algorithm SHA256).Hash
 $dir = Join-Path $PSScriptRoot "manifests\r\RDK456\Lighten\$Version"
 New-Item -ItemType Directory -Force $dir | Out-Null

@@ -1,5 +1,6 @@
 //! NTFS fast scan, OneDrive, startup apps, extra finders, undo log, exclusions.
 //! Same rules as tools.rs: deletes only act on paths a finder just offered, never protected or excluded ones.
+use super::more::{log_action, note_hidden, Job};
 use super::tools::{hit, mtime, offer, offered, protected, root_ok, run_ps, tail, walk_files, DupGroup, FileHit};
 use super::*;
 use std::collections::HashMap;
@@ -284,7 +285,7 @@ fn parse_record(rec: &mut [u8]) -> Option<Rec> {
     Some(Rec::Base(Ent { parent, name: name?, size: size.unwrap_or(0), mtime: mt, attrs: at, dir: flags & 2 != 0 }))
 }
 
-fn build_mft(letter: char) -> Result<Mft, String> {
+fn build_mft(letter: char, job: Job) -> Result<Mft, String> {
     let mut f = fs::File::open(format!(r"\\.\{letter}:")).map_err(|e| format!("Cannot read the volume (needs administrator): {e}"))?;
     let boot = read_at(&mut f, 0, 512)?;
     if &boot[3..11] != b"NTFS    " {
@@ -320,10 +321,12 @@ fn build_mft(letter: char) -> Result<Mft, String> {
     let step = align((4 << 20) / rs * rs).max(align(rs));
     let mut idx = 0usize;
     let mut stats = [0u64; 5];
+    job.phase(total as u64);
     'outer: for (lcn, len) in runs {
         let run_bytes = len * cl;
         let mut done = 0u64;
         while done < run_bytes {
+            job.check()?;
             if idx >= total {
                 break 'outer;
             }
@@ -351,6 +354,7 @@ fn build_mft(letter: char) -> Result<Mft, String> {
                 }
             }
             done += want as u64;
+            job.tick((want / rs) as u64);
         }
     }
     for (b, s) in ext {
@@ -417,10 +421,11 @@ pub struct ScanInfo {
 }
 #[tauri::command]
 pub async fn disk_scan(drive: String) -> Result<ScanInfo, String> {
+    let job = Job::start();
     blocking(move || -> Result<ScanInfo, String> {
         let l = drive_letter(&drive).ok_or("Unknown drive")?;
         let t = std::time::Instant::now();
-        let m = build_mft(l)?;
+        let m = build_mft(l, job)?;
         let dirs = m.ents.iter().flatten().filter(|e| e.dir).count() as u64;
         let files = m.ents.iter().flatten().count() as u64 - dirs;
         let bytes = m.tot.get(5).map(|t| t.0).unwrap_or(0);
@@ -467,17 +472,20 @@ pub async fn fast_dir(path: String) -> Result<Vec<Entry>, String> {
 }
 /// Big files from a fresh table read, or None if the drive is not NTFS / not readable (caller walks instead).
 /// Sizes here are on-disk (allocated) bytes, so sparse or compressed files can fall below `min` while the walk would list them.
-pub fn mft_big(root: &Path, min: u64) -> Option<Vec<FileHit>> {
+pub fn mft_big(root: &Path, min: u64, job: Job) -> Option<Vec<FileHit>> {
     let s = root.to_string_lossy();
     let l = s.chars().next()?.to_ascii_uppercase();
     if !l.is_ascii_uppercase() || s.chars().nth(1) != Some(':') {
         return None;
     }
-    let m = build_mft(l).ok()?;
+    let m = build_mft(l, job).ok()?;
     let rl = lc(root);
     let skip = ["windows", "program files", "program files (x86)", "programdata", "windowsapps", ".git", "node_modules", "$recycle.bin", "system volume information"];
     let mut v = vec![];
     for (i, e) in m.ents.iter().enumerate() {
+        if job.stopped() {
+            break;
+        }
         let Some(e) = e else { continue };
         if e.dir || e.size < min || e.attrs & 0x400 != 0 {
             continue;
@@ -521,13 +529,16 @@ pub struct OdScan {
 }
 #[tauri::command]
 pub async fn onedrive_scan() -> Result<OdScan, String> {
-    blocking(|| {
+    let job = Job::start();
+    blocking(move || -> Result<OdScan, String> {
         let roots = od_roots();
         let mut files = vec![];
         for r in &roots {
             // placeholders are reparse points, so (unlike other scans) links are entered; depth-capped
             let mut stack = vec![(r.clone(), 0u32)];
             while let Some((d, depth)) = stack.pop() {
+                job.check()?;
+                job.tick(1);
                 let Ok(rd) = fs::read_dir(&d) else { continue };
                 for e in rd.flatten() {
                     let p = e.path();
@@ -551,9 +562,9 @@ pub async fn onedrive_scan() -> Result<OdScan, String> {
         files.sort_by(|a, b| b.bytes.cmp(&a.bytes));
         files.truncate(500);
         offer(files.iter().map(|h| h.path.clone()));
-        OdScan { roots: roots.iter().map(|r| r.to_string_lossy().into()).collect(), files }
+        Ok(OdScan { roots: roots.iter().map(|r| r.to_string_lossy().into()).collect(), files })
     })
-    .await
+    .await?
 }
 #[derive(Serialize)]
 pub struct Freed {
@@ -591,6 +602,7 @@ pub async fn onedrive_free(paths: Vec<String>) -> Result<Freed, String> {
                 done += 1;
             }
         }
+        log_action("Freed OneDrive files", freed, done, true);
         Ok(Freed { freed, done, failed: failed0 + ok.len() as u64 - done })
     })
     .await?
@@ -604,7 +616,11 @@ pub struct EmptyDir {
     modified: u64,
 }
 /// True when `d` holds no files anywhere below it. Pushes the biggest empty subfolders of non-empty parents to `out`.
-fn empty_tree(d: &Path, depth: u32, out: &mut Vec<PathBuf>) -> bool {
+fn empty_tree(d: &Path, depth: u32, job: Job, out: &mut Vec<PathBuf>) -> bool {
+    if job.stopped() {
+        return false;
+    }
+    job.tick(1);
     let Ok(rd) = fs::read_dir(d) else { return false };
     let (mut all, mut kids) = (true, vec![]);
     let recent = now().saturating_sub(86400);
@@ -615,7 +631,7 @@ fn empty_tree(d: &Path, depth: u32, out: &mut Vec<PathBuf>) -> bool {
         let keep = !md.is_dir() || is_reparse(&md) || depth >= 12 || excluded(&p) || protected(&p) || denied_leaf(&n) || n.starts_with('.') || mtime(&md) > recent;
         if keep {
             all = false;
-        } else if empty_tree(&p, depth + 1, out) {
+        } else if empty_tree(&p, depth + 1, job, out) {
             kids.push(p);
         } else {
             all = false;
@@ -631,10 +647,12 @@ fn denied_leaf(n: &str) -> bool {
 }
 #[tauri::command]
 pub async fn find_empty(root: String) -> Result<Vec<EmptyDir>, String> {
+    let job = Job::start();
     blocking(move || -> Result<Vec<EmptyDir>, String> {
         let root = root_ok(&root)?;
         let mut v = vec![];
-        empty_tree(&root, 0, &mut v);
+        empty_tree(&root, 0, job, &mut v);
+        job.check()?;
         let mut out: Vec<EmptyDir> = v
             .into_iter()
             .map(|p| EmptyDir { name: p.file_name().map(|n| n.to_string_lossy().into()).unwrap_or_default(), modified: fs::symlink_metadata(&p).map(|m| mtime(&m)).unwrap_or(0), path: p.to_string_lossy().into() })
@@ -745,10 +763,11 @@ fn uf_find(p: &mut [usize], mut x: usize) -> usize {
 #[tauri::command]
 pub async fn find_similar(root: String, max_dist: u32, cap: Option<usize>) -> Result<Vec<DupGroup>, String> {
     let cap = cap.unwrap_or(6000).clamp(100, 100_000);
+    let job = Job::start();
     blocking(move || -> Result<Vec<DupGroup>, String> {
         let root = root_ok(&root)?;
         let mut files: Vec<FileHit> = vec![];
-        walk_files(&root, false, &mut |p, md| {
+        walk_files(&root, false, job, &mut |p, md| {
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             if ["jpg", "jpeg", "png", "gif", "bmp", "webp"].contains(&ext.as_str()) && (50_000..=60_000_000).contains(&md.len()) && files.len() < cap {
                 files.push(hit(p, md));
@@ -757,10 +776,15 @@ pub async fn find_similar(root: String, max_dist: u32, cap: Option<usize>) -> Re
         let n = files.len();
         let mut hashes: Vec<Option<u64>> = vec![None; n];
         let chunk = (n / 8).max(1);
+        job.phase(n as u64);
         std::thread::scope(|s| {
             for (fs_, hs) in files.chunks(chunk).zip(hashes.chunks_mut(chunk)) {
                 s.spawn(move || {
                     for (f, h) in fs_.iter().zip(hs.iter_mut()) {
+                        if job.stopped() {
+                            break;
+                        }
+                        job.tick(1);
                         *h = dhash(Path::new(&f.path));
                     }
                 });
@@ -771,6 +795,7 @@ pub async fn find_similar(root: String, max_dist: u32, cap: Option<usize>) -> Re
         let mut par: Vec<usize> = (0..n).collect();
         let d = max_dist.min(12);
         for a in 0..idx.len() {
+            job.check()?;
             for b in a + 1..idx.len() {
                 if (hashes[idx[a]].unwrap() ^ hashes[idx[b]].unwrap()).count_ones() <= d {
                     let (ra, rb) = (uf_find(&mut par, idx[a]), uf_find(&mut par, idx[b]));
@@ -796,6 +821,7 @@ pub async fn find_similar(root: String, max_dist: u32, cap: Option<usize>) -> Re
             w(b).cmp(&w(a))
         });
         out.truncate(100);
+        job.check()?;
         offer(out.iter().flat_map(|g| g.files.iter().map(|f| f.path.clone())));
         Ok(out)
     })
@@ -908,7 +934,10 @@ fn find_hidden(m: &Mft) -> Vec<Hidden> {
 pub async fn hidden_space() -> Result<Vec<Hidden>, String> {
     blocking(|| -> Result<Vec<Hidden>, String> {
         let g = MFT.lock().unwrap();
-        Ok(find_hidden(g.as_ref().ok_or("Run the fast scan first")?))
+        let m = g.as_ref().ok_or("Run the fast scan first")?;
+        let v = find_hidden(m);
+        note_hidden(m.letter, v.len() as u64, v.iter().map(|h| h.bytes).sum());
+        Ok(v)
     })
     .await?
 }
