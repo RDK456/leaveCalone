@@ -31,7 +31,7 @@ function findTab(k) {
 }
 function vFind() {
   const f = S.find, cfg = FCFG[f.tab];
-  const tabs = Object.entries(FT).map(([k, v]) => `<button class="tab ${f.tab === k ? 'on' : ''}" data-ft="${k}">${v}</button>`).join('');
+  const tabs = Object.entries(FT).map(([k, v]) => `<button class="tab ${f.tab === k ? 'on' : ''}" data-ft="${k}"${f.tab === k ? ' aria-current="true"' : ''}>${v}</button>`).join('');
   const roots = driveRoots().map((r) => `<option value="${esc(r)}">`).join('');
   const bar = `<div class="bar2">${cfg.includes('root') ? `<input class="t" id="f_root" list="roots" value="${esc(f.root)}" style="width:300px" aria-label="Folder to scan"><datalist id="roots">${roots}</datalist>` : ''}
     ${cfg.includes('min') ? `<select id="f_min" aria-label="Minimum size">${[10, 100, 500, 1000].map((m) => `<option value="${m}" ${f.min === m ? 'selected' : ''}>Over ${m >= 1000 ? '1 GB' : m + ' MB'}</option>`).join('')}</select>` : ''}

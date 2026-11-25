@@ -55,8 +55,9 @@ h2 span{font-size:13px;color:var(--muted);font-weight:400}
 .row{display:grid;align-items:center;column-gap:16px;padding:10px 20px;min-height:56px;border-top:1px solid var(--rule)}
 .row:first-child{border-top:0}
 .row .n{min-width:0}
-.row .n b{font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.row .n small{display:block;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .n b{font-weight:500;display:block;overflow-wrap:anywhere}
+.row .n small{display:block;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.row .n [title]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row.h{min-height:36px;padding-top:6px;padding-bottom:6px;color:var(--muted);font-size:12px;border-top:0;border-bottom:1px solid var(--border)}
 .cl{grid-template-columns:24px 1fr 130px 90px}
 .mv{grid-template-columns:1fr 130px 100px 110px 90px}
@@ -133,9 +134,9 @@ button.tmc:hover{box-shadow:inset 0 0 0 2px var(--hue)}
 .alert{color:var(--pill-neg-ink);background:var(--pill-neg-bg);padding:12px 14px;border-radius:var(--r-ctl);margin:0 0 16px;line-height:1.5}
 .alert .link{color:inherit;text-decoration:underline}
 .alert code{word-break:break-all}
-#ask{position:fixed;right:20px;bottom:76px;z-index:20}
-#ask .ab{box-shadow:0 2px 8px #0003}
-.ap{width:340px;max-width:calc(100vw - 96px);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);box-shadow:0 8px 28px #0003;display:flex;flex-direction:column}
+#ask{position:fixed;left:8px;bottom:98px;z-index:20}
+#ask .ab{width:40px;padding:0;font-size:13px}
+.ap{margin-left:56px;width:340px;max-width:calc(100vw - 96px);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);box-shadow:0 8px 28px #0003;display:flex;flex-direction:column}
 .ah{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--rule)}
 .al{padding:12px 14px;max-height:340px;overflow:auto;display:flex;flex-direction:column;gap:8px}
 .am{background:var(--raised);padding:8px 10px;border-radius:var(--r-ctl);color:var(--text);line-height:1.45;max-width:92%}

@@ -161,22 +161,33 @@ function vSettings() {
   return `<div class="wrap">${head('Settings', `Lighten ${esc(i?.version || '')}`)}
     ${generalHtml()}
     <section><h2>Scheduled scan <span>${lastTxt}</span></h2><div class="card">
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Scan in the background</b><small style="white-space:normal">Creates a Windows Task Scheduler job that runs Lighten with administrator rights and no window, even when the app is closed. Each run measures what is cleanable, saves a free-space reading for the Overview chart, and shows a notification when a lot can be cleaned or free space drops sharply. Turn it off to remove the job.</small></div><input type="checkbox" id="s_auto" ${s.auto_scan ? 'checked' : ''}></div>
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Repeat every</b><small style="white-space:normal">Days between scans, 1 to 30. More frequent scans give the growth chart and the sudden-drop alert finer detail; each scan takes under a minute.</small></div><input id="s_days" type="number" min="1" max="30" value="${s.every_days || 7}" style="${inp};width:70px"></div>
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Also clean the safe set</b><small style="white-space:normal">After each scan, delete the items that are ticked by default on the Clean page (temp files, shader caches, logs and similar that apps rebuild). It never empties the Recycle Bin, never touches browser data or the opt-in items, and skips anything in use or on your exclusion list. Off means scan and notify only.</small></div><input type="checkbox" id="s_clean" ${s.auto_clean ? 'checked' : ''}></div></div>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Scan in the background</b><small style="white-space:normal">Creates a Windows Task Scheduler job that runs Lighten with administrator rights and no window, even when the app is closed. Each run measures what is cleanable, saves a free-space reading for the Overview chart, and shows a notification when a lot can be cleaned or free space drops sharply. Turn it off to remove the job.</small></div><input type="checkbox" id="s_auto" aria-label="Scan in the background" ${s.auto_scan ? 'checked' : ''}></div>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Repeat every</b><small style="white-space:normal">Days between scans, 1 to 30. More frequent scans give the growth chart and the sudden-drop alert finer detail; each scan takes under a minute.</small></div><input id="s_days" aria-label="Repeat every, in days" type="number" min="1" max="30" value="${s.every_days || 7}" style="${inp};width:70px"></div>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Also clean the safe set</b><small style="white-space:normal">After each scan, delete the items that are ticked by default on the Clean page (temp files, shader caches, logs and similar that apps rebuild). It never empties the Recycle Bin, never touches browser data or the opt-in items, and skips anything in use or on your exclusion list. Off means scan and notify only.</small></div><input type="checkbox" id="s_clean" aria-label="Also clean the safe set" ${s.auto_clean ? 'checked' : ''}></div></div>
       <p class="note"><button class="btn pri" data-a="savesettings">Save schedule</button> Applies the three settings above. Nothing changes until you press Save.</p></section>
     <section><h2>Updates <span>${updMsg || (S.inst?.signing ? 'Signed updates required' : 'Signing key not built in: hash check only')}</span></h2><div class="card">
       <div class="row" style="grid-template-columns:1fr"><div class="n"><b>Update manifest URL</b><small style="white-space:normal">An https link to a small JSON file that names the newest version. Lighten only accepts it if it is signed with the key built into this copy, and checks the download against its SHA-256. When a patch exists for your version only the difference is downloaded. Leave empty to turn updates off; nothing is ever checked in the background.</small></div></div>
-      <div class="row" style="grid-template-columns:1fr"><input id="s_url" value="${esc(s.update_url)}" placeholder="https://example.com/lighten/manifest.json" style="${inp};min-width:0;width:100%"></div></div>
+      <div class="row" style="grid-template-columns:1fr"><input id="s_url" aria-label="Update manifest URL" value="${esc(s.update_url)}" placeholder="https://example.com/lighten/manifest.json" style="${inp};min-width:0;width:100%"></div></div>
       <p class="note"><button class="btn line" data-a="checkupd">Check for updates</button> ${u && u.available ? '<button class="btn pri" data-a="applyupd">Install update</button>' : ''}</p></section></div>`;
 }
 
 const views = { overview: vOverview, clean: vClean, move: vMove, explore: vExplore, moved: vMoved, settings: vSettings };
 let cur = 'overview';
-function render() { const y = view.scrollTop; view.innerHTML = views[cur](); view.scrollTop = y; }
+// innerHTML replaces the focused control, so find its twin again or keyboard users land on <body>.
+function focusKey(el) {
+  if (!el || !view.contains(el)) return null;
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  const k = [...el.attributes].filter((a) => a.name.startsWith('data-')).map((a) => `[${a.name}="${CSS.escape(a.value)}"]`).join('');
+  return k ? el.tagName.toLowerCase() + k : null;
+}
+function render() {
+  const y = view.scrollTop, k = focusKey(document.activeElement);
+  view.innerHTML = views[cur](); view.scrollTop = y;
+  if (k) view.querySelector(k)?.focus({ preventScroll: true });
+}
 async function go(v) {
   cur = v;
-  document.querySelectorAll('.nav').forEach((n) => n.classList.toggle('on', n.dataset.view === v));
+  document.querySelectorAll('.nav[data-view]').forEach((n) => { const on = n.dataset.view === v; n.classList.toggle('on', on); on ? n.setAttribute('aria-current', 'page') : n.removeAttribute('aria-current'); });
   if (v === 'explore') { await refreshDrives(); S.exp = null; }
   if (v === 'moved') { S.moved = null; S.links = null; render(); S.moved = await invoke('moved_list'); render(); S.links = await invoke('find_links'); }
   if (v === 'settings') { S.settings = null; render(); [S.settings, S.info, S.lastScan] = await Promise.all([invoke('get_settings'), invoke('app_info'), invoke('last_scan')]); }

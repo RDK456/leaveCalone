@@ -55,6 +55,7 @@ function askSend(q) {
   else m.forEach((x) => S.ask.log.push({ t: x.a, go: x.go }));
   renderAsk();
 }
+function closeAsk() { S.ask.open = false; renderAsk(); $('#ask .ab').focus(); }
 function renderAsk() {
   let box = $('#ask');
   if (!box) { box = document.createElement('div'); box.id = 'ask'; document.body.appendChild(box); }
@@ -71,11 +72,11 @@ document.addEventListener('click', (e) => {
   const g = e.target.closest('[data-ask-go]'); if (g) return askAct(g.dataset.askGo);
   const b = e.target.closest('[data-ask]'); if (!b) return;
   if (b.dataset.ask === 'open') { S.ask.open = true; renderAsk(); }
-  if (b.dataset.ask === 'close') { S.ask.open = false; renderAsk(); }
+  if (b.dataset.ask === 'close') closeAsk();
 });
 document.addEventListener('submit', (e) => {
   if (!e.target.closest('[data-ask="form"]')) return;
   e.preventDefault(); const i = $('#ask_in'); const q = i.value; askSend(q);
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.ask.open) { S.ask.open = false; renderAsk(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.ask.open) closeAsk(); });
 renderAsk();
