@@ -59,6 +59,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A release made by hand creates the tag too; this run then only proves the tag tests and builds.
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -eq 0) { Write-Host 'A release for this tag already exists; leaving it alone.'; exit 0 }
           $sha = (Get-FileHash out\Lighten.exe -Algorithm SHA256).Hash.ToLower()
           $files = @(Get-ChildItem out -File | ForEach-Object FullName)
           gh release create $env:GITHUB_REF_NAME @files --draft --title "Lighten $env:GITHUB_REF_NAME" --notes "SHA-256 of Lighten.exe: $sha" --generate-notes

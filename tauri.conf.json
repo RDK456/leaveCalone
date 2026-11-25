@@ -1,6 +1,6 @@
 {
   "productName": "Lighten",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "app.lighten.cleaner",
   "build": { "frontendDist": "./dist" },
   "app": {
