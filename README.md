@@ -148,7 +148,7 @@ Code signing and a winget package are documented in [docs/SIGNING.md](docs/SIGNI
 Push a tag that matches the version in `Cargo.toml`. GitHub Actions tests, builds and creates a **draft** release for you to publish. Add the optional secrets named at the top of the workflow file to include the signed update manifest and a code signature. To build the manifest by hand:
 
 ```powershell
-.\scripts\make-latest.ps1 -Exe .\Lighten.exe -Version 0.1.3 -KeyFile .\keys\update.key
+.\scripts\make-latest.ps1 -Exe .\Lighten.exe -Version 0.1.4 -KeyFile .\keys\update.key
 ```
 
 Add `-PreviousExe` and `-PreviousVersion` to also write a small patch from the last release; upload it too.
@@ -167,7 +167,7 @@ lighten.exe --sign key.txt 0.0.2 <sha256> sig.txt
 
 ## Status
 
-v0.1.3, early. Tested: scanning, cleaning (on test files), delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, the right-click entry and the UI. Fast scan, restore points, install and administrator-only cleaning need more testing on varied machines. Back up what matters and use the dry-run report first.
+v0.1.4, early. Tested: scanning, cleaning (on test files), delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, the right-click entry and the UI. Fast scan, restore points, install and administrator-only cleaning need more testing on varied machines. Back up what matters and use the dry-run report first.
 
 **Known issue:** in v0.1.3 and earlier, **Update** in the app closes Lighten without finishing. Download the new `Lighten.exe` from [Releases](https://github.com/RDK456/leaveCalone/releases/latest) instead.
 
