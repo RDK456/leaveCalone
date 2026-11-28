@@ -46,7 +46,7 @@ PackageLocale: en-US
 Publisher: RDK456
 PackageName: Lighten
 PackageUrl: https://github.com/RDK456/leaveCalone
-License: Proprietary
+License: MIT
 ShortDescription: Windows disk cleaner. Cleans junk, finds big and duplicate files, and moves folders to another drive without breaking anything.
 Tags:
 - disk-cleaner

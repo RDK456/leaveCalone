@@ -204,9 +204,49 @@ pub fn launch_path() -> Option<String> {
     analyze_arg(&std::env::args().collect::<Vec<_>>()).filter(|p| Path::new(p).is_dir())
 }
 
+// ---------- AI model folders: sizes only, never cleaned ----------
+/// Where each tool keeps downloaded models. `var` reads an environment variable, so a moved store is found.
+pub fn ai_dirs(profile: &Path, var: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, PathBuf)> {
+    let set = |k: &str| var(k).filter(|v| !v.trim().is_empty()).map(PathBuf::from);
+    let hf = set("HF_HUB_CACHE").or_else(|| set("HF_HOME").map(|h| h.join("hub"))).unwrap_or_else(|| profile.join(r".cache\huggingface\hub"));
+    vec![
+        ("Ollama", set("OLLAMA_MODELS").unwrap_or_else(|| profile.join(r".ollama\models"))),
+        ("Hugging Face", hf),
+        ("LM Studio", profile.join(r".lmstudio\models")),
+        ("LM Studio (older)", profile.join(r".cache\lm-studio\models")),
+    ]
+}
+#[derive(Serialize)]
+pub struct AiStore {
+    name: String,
+    path: String,
+    bytes: u64,
+}
+#[tauri::command]
+pub async fn ai_models() -> Result<Vec<AiStore>, String> {
+    blocking(|| {
+        ai_dirs(&envp("USERPROFILE"), |k| std::env::var(k).ok())
+            .into_iter()
+            .filter(|(_, p)| p.is_dir())
+            .map(|(name, p)| AiStore { name: name.into(), bytes: dir_size(&p, 0).bytes, path: p.to_string_lossy().into() })
+            .filter(|s| s.bytes > 0)
+            .collect()
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_model_folders_follow_the_tools_own_settings() {
+        let at = |vars: &[(&str, &str)]| ai_dirs(Path::new(r"C:\Users\a"), |k| vars.iter().find(|v| v.0 == k).map(|v| v.1.to_string()));
+        assert_eq!(at(&[])[0].1, Path::new(r"C:\Users\a\.ollama\models"));
+        assert_eq!(at(&[])[1].1, Path::new(r"C:\Users\a\.cache\huggingface\hub"));
+        assert_eq!(at(&[("OLLAMA_MODELS", r"D:\m"), ("HF_HOME", r"D:\hf")])[0].1, Path::new(r"D:\m"));
+        assert_eq!(at(&[("HF_HOME", r"D:\hf")])[1].1, Path::new(r"D:\hf\hub"));
+    }
 
     #[test]
     fn cancel_stops_running_jobs_but_not_later_ones() {

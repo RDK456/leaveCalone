@@ -15,7 +15,7 @@ const ASK = [
   { k: ['empty folder', 'empty dir'], a: 'Empty folders lists folders with nothing inside. Nothing is pre-selected.', go: [['Find empty folders', 'find:empty']] },
   { k: ['shortcut', 'broken link', 'lnk'], a: 'Broken shortcuts finds Desktop and Start menu links whose target is gone.', go: [['Find broken shortcuts', 'find:shortcuts']] },
   { k: ['onedrive', 'cloud'], a: 'Free up space keeps OneDrive files in the cloud and removes the local copy.', go: [['OneDrive finder', 'find:onedrive']] },
-  { k: ['undo', 'restore', 'deleted by mistake', 'recycle', 'got deleted', 'bring back'], a: 'Undo lists files Lighten sent to the Recycle Bin that are still in it, and puts them back.', go: [['Open Undo', 'find:undo']] },
+  { k: ['undo', 'restore', 'deleted by mistake', 'recycle', 'got deleted', 'bring back'], a: 'Recently deleted lists files Lighten sent to the Recycle Bin that are still in it, and puts them back.', go: [['Open Recently deleted', 'find:undo']] },
   { k: ['move', 'another drive', 'other drive', 'd:', 'junction', 'symlink'], a: 'Move copies a folder to another drive, verifies it, and leaves a link so apps keep working.', go: [['Open Move', 'view:move']] },
   { k: ['moved', 'move back', 'undo move'], a: 'Moved folders lists everything linked to another drive and can move it back.', go: [['Open Moved folders', 'view:moved']] },
   { k: ['startup', 'slow boot', 'boot', 'starts with windows', 'autostart', 'login'], a: 'Startup apps can be turned off without uninstalling them.', go: [['Open System', 'view:system']] },
@@ -33,6 +33,7 @@ const ASK = [
   { k: ['history', 'what was cleaned', 'what did', 'freed', 'last clean', 'log'], a: 'Recent cleanups, at the bottom of Overview, lists what was cleaned, deleted or moved, and when.', go: [['Open Overview', 'view:overview']] },
   { k: ['right click', 'right-click', 'context menu', 'explorer menu', 'analyze'], a: 'Settings, General: add "Analyze with Lighten" to the folder and drive right-click menu.', go: [['Open Settings', 'view:settings']] },
   { k: ['firefox', 'steam', 'epic', 'teams', 'spotify', 'adobe', 'premiere'], a: 'The Clean page has caches for Firefox, Steam, Epic Games, Teams, Spotify and Adobe. They are not ticked by default, and an app must be closed first.', go: [['Open Clean', 'view:clean']] },
+  { k: ['ai', 'model', 'ollama', 'hugging', 'lm studio', 'llm'], a: 'The System page shows how much space downloaded AI models use. Lighten never deletes them. pnpm and uv caches are on the Clean page.', go: [['Open System', 'view:system'], ['Open Clean', 'view:clean']] },
   { k: ['command', 'cli', 'terminal', 'script'], a: 'From an elevated terminal: Lighten.exe --scan, --clean, --version, --help. Output can also be redirected to a file.', go: [] },
 ];
 const ASK_TIPS = 'Try: "c drive is full", "find duplicates", "turn on dark mode", "protect a folder", "undo delete", "slow startup".';

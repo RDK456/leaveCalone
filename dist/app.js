@@ -8,7 +8,7 @@ const fmt = (b) => b >= GB ? `${(b / GB).toFixed(1)}<span class="u">GB</span>` :
 const txt = (b) => b >= GB ? `${(b / GB).toFixed(1)} GB` : `${Math.round(b / MB).toLocaleString()} MB`;
 const dash = '<span class="mut">–</span>';
 
-const S = { drives: [], cats: null, cands: null, sel: new Set(), moveDrive: null, scanning: false, last: null, exp: null, expItems: null, moved: null, links: null, cleanDrive: 'C:', dcats: null, settings: null, info: null, lastScan: null, upd: null };
+const S = { picked: new Map(), drives: [], cats: null, cands: null, sel: new Set(), moveDrive: null, scanning: false, last: null, exp: null, expItems: null, moved: null, links: null, cleanDrive: 'C:', dcats: null, settings: null, info: null, lastScan: null, upd: null };
 
 function toast(msg, bad) {
   const t = document.createElement('div');
@@ -27,15 +27,17 @@ async function scan() {
     await refreshDrives();
     const [cats, cands] = await Promise.all([invoke('scan_clean', { drive: 'C:' }), invoke('move_candidates')]);
     S.cats = cats; S.cands = cands;
-    S.sel = new Set(cats.filter((c) => c.default_on && !c.busy && c.bytes > 0).map((c) => c.id));
+    if (S.cleanDrive === 'C:') S.sel = pickSel(cats);
     S.moveDrive = S.moveDrive || otherDrives().sort((a, b) => b.free - a.free)[0]?.letter || null;
   } catch (e) { toast(String(e), true); }
   S.scanning = false; render();
   if (window.afterScan) window.afterScan();
 }
+/** The default ticks, with every tick the user changed kept as they left it. */
+const pickSel = (list) => new Set((list || []).filter((c) => !c.busy && c.bytes > 0 && (S.picked.has(c.id) ? S.picked.get(c.id) : c.default_on)).map((c) => c.id));
 const curCats = () => (S.cleanDrive === 'C:' ? S.cats : S.dcats);
 const selBytes = (l = curCats()) => (l || []).filter((c) => S.sel.has(c.id)).reduce((a, c) => a + c.bytes, 0);
-const defBytes = () => (S.cats || []).filter((c) => c.default_on && !c.busy).reduce((a, c) => a + c.bytes, 0);
+const reviewBytes = () => { const p = pickSel(S.cats); return (S.cats || []).filter((c) => p.has(c.id)).reduce((a, c) => a + c.bytes, 0); }; // what the Clean page will show ticked
 const cleanable = () => (S.cats || []).filter((c) => !c.busy).reduce((a, c) => a + c.bytes, 0);
 const movable = () => (S.cands || []).filter((c) => c.status === 'ready').reduce((a, c) => a + c.bytes, 0);
 
@@ -90,7 +92,7 @@ function vOverview() {
   const finding = !sc ? 'Scanning C: for things that are safe to remove…'
     : `<b>${txt(cleanable())}</b> on C: is safe to clean${movable() && S.moveDrive ? ` and <b>${txt(movable())}</b> can move to ${esc(S.moveDrive)}` : ''}.`;
   const act = `<button class="btn line" data-a="rescan" ${S.scanning ? 'disabled' : ''}>${S.scanning ? 'Scanning…' : 'Rescan'}</button>` +
-    `<button class="btn pri" data-a="goclean" ${!sc || defBytes() === 0 ? 'disabled' : ''}>Review ${sc ? txt(defBytes()) : ''}</button>`;
+    `<button class="btn pri" data-a="goclean" ${!sc || reviewBytes() === 0 ? 'disabled' : ''}>Review ${sc ? txt(reviewBytes()) : ''}</button>`;
   const used = c ? c.total - c.free : 0;
   const kpis = `<div class="kpis">
     <div class="kpi"><div class="l">Free on C:</div><div class="v">${c ? fmt(c.free) : dash}</div></div>
@@ -101,28 +103,53 @@ function vOverview() {
     return `<div class="drive"><div><b>${esc(d.letter)}</b><div class="mut" style="font-size:12px">${esc(d.label || 'Local disk')}</div></div>
       <div class="bar ${d.letter.toUpperCase() === 'C:' ? 'main' : ''}" role="img" aria-label="${p}% used"><i style="width:${p}%"></i></div>
       <div class="r">${txt(d.free)} free <span class="mut">of ${txt(d.total)}</span></div></div>`; }).join('');
-  const topClean = (sc || []).filter((x) => x.bytes > 0).sort((a, b) => b.bytes - a.bytes).slice(0, 5);
-  const topMove = (cd || []).slice(0, 5);
+  const topClean = (sc || []).filter((x) => x.bytes > 0).sort((a, b) => b.bytes - a.bytes).slice(0, 3);
+  const topMove = (cd || []).slice(0, 3);
   const rowsC = topClean.map((x) => `<div class="row sm2"><div class="n"><b>${esc(x.name)}</b><small>${esc(x.busy ? x.busy + ' is running' : 'Safe')}</small></div><div class="r">${fmt(x.bytes)}</div><div></div></div>`).join('') || `<div class="empty">${sc ? 'Nothing to clean.' : ''}</div>`;
   const rowsM = topMove.map((x) => `<div class="row sm2"><div class="n"><b>${esc(x.name)}</b><small>${esc(x.area)}</small></div><div class="r">${fmt(x.bytes)}</div><div class="r"><button class="btn sm line" data-a="move" data-p="${esc(x.path)}" ${x.status === 'busy' ? 'disabled' : ''}>Move</button></div></div>`).join('') || `<div class="empty">${cd ? 'Nothing large to move.' : ''}</div>`;
-  return `<div class="wrap">${head('Overview', finding, act)}${hiddenWarning()}${kpis}
+  return `<div class="wrap">${head('Overview', finding, act)}${attentionHtml()}${kpis}
     <section><h2>Drives</h2><div class="card">${drv || skeleton()}</div></section>
     ${growthHtml()}
     <section class="two"><div><h2>Largest cleanable <span><button class="link" data-v="clean">View all</button></span></h2><div class="card">${sc ? rowsC : skeleton()}</div></div>
     <div><h2>Largest movable <span><button class="link" data-v="move">View all</button></span></h2><div class="card">${cd ? rowsM : skeleton()}</div></div></section>${historyHtml()}</div>`;
 }
 
+const CLEAN_GROUPS = [
+  ['Windows', ['temp', 'inet', 'dumps', 'shader', 'store', 'winlogs', 'thumbs', 'wutemp', 'do', 'wintemp', 'dtemp', 'dtmp']],
+  ['Browsers', ['chrome', 'edge', 'brave', 'firefox']],
+  ['Apps and games', ['nvupd', 'discord', 'slack', 'teams', 'spotify', 'steam', 'epic', 'adobe']],
+  ['Developer tools', ['npm', 'pip', 'nuget', 'cargo', 'gradle', 'yarn', 'pnpm', 'uv', 'vscode']],
+  ['Recycle Bin', ['recycle']],
+];
+const groupOf = (id) => (CLEAN_GROUPS.find(([, ids]) => ids.includes(id)) || ['Other'])[0];
+const tickable = (c) => !c.busy && c.bytes > 0;
+/** Bulk ticking never includes the Recycle Bin: emptying it is permanent. */
+const groupIds = (name) => (curCats() || []).filter((c) => tickable(c) && c.id !== 'recycle' && (name === '*' || groupOf(c.id) === name)).map((c) => c.id);
+function pick(ids, on) {
+  ids.forEach((id) => { S.picked.set(id, on); on ? S.sel.add(id) : S.sel.delete(id); });
+  render();
+}
+function cleanRow(c) {
+  const pill = c.busy ? `<span class="pill warn">Close ${esc(c.busy)}</span>` : c.id === 'recycle' ? '<span class="pill no">Permanent</span>' : '<span class="pill ok">Safe</span>';
+  return `<div class="row cl"><input type="checkbox" data-c="${c.id}" aria-label="${esc(c.name)}" ${S.sel.has(c.id) ? 'checked' : ''} ${tickable(c) ? '' : 'disabled'}>
+    <div class="n"><b>${esc(c.name)}</b><small>${esc(c.desc)}</small></div><div>${pill}</div><div class="r">${fmt(c.bytes)}</div></div>`;
+}
+function cleanGroups(list) {
+  return [...CLEAN_GROUPS.map(([n]) => n), 'Other'].map((name) => {
+    const items = list.filter((c) => groupOf(c.id) === name).sort((a, b) => b.bytes - a.bytes);
+    if (!items.length) return '';
+    const total = items.reduce((a, c) => a + c.bytes, 0);
+    const ids = groupIds(name), on = ids.filter((id) => S.sel.has(id)).length;
+    const box = name === 'Recycle Bin' ? '<span></span>' : `<input type="checkbox" data-g="${name}" aria-label="Select all in ${name}" ${ids.length && on === ids.length ? 'checked' : ''} ${on && on < ids.length ? 'data-mixed' : ''} ${ids.length ? '' : 'disabled'}>`;
+    return `<div class="row cl gh">${box}<b>${name}</b><span></span><span class="r">${fmt(total)}</span></div>${items.map(cleanRow).join('')}`;
+  }).join('');
+}
 function vClean() {
   const sc = curCats();
   const isC = S.cleanDrive === 'C:';
-  const rows = (sc || []).slice().sort((a, b) => b.bytes - a.bytes).map((c) => {
-    const off = c.busy || c.bytes === 0;
-    const pill = c.busy ? `<span class="pill warn">Close ${esc(c.busy)}</span>` : c.id === 'recycle' ? '<span class="pill no">Permanent</span>' : '<span class="pill ok">Safe</span>';
-    return `<div class="row cl"><input type="checkbox" data-c="${c.id}" aria-label="${esc(c.name)}" ${S.sel.has(c.id) ? 'checked' : ''} ${off ? 'disabled' : ''}>
-      <div class="n"><b>${esc(c.name)}</b><small>${esc(c.desc)}</small></div><div>${pill}</div><div class="r">${fmt(c.bytes)}</div></div>`;
-  }).join('');
+  const rows = cleanGroups(sc || []);
   const last = S.last ? `Freed <b>${txt(S.last.freed)}</b>${S.last.failed ? ` · ${S.last.failed} files were in use and kept` : ''}.` : 'Only fixed, known locations are touched. Files in use are skipped.';
-  return `<div class="wrap">${head('Clean', last, `<select id="cdrv" aria-label="Drive to clean">${S.drives.map((d) => `<option value="${esc(d.letter)}" ${d.letter === S.cleanDrive ? 'selected' : ''}>${esc(d.letter)} · ${txt(d.free)} free</option>`).join('')}</select><button class="btn line" data-a="rescan" ${S.scanning ? 'disabled' : ''}>Rescan</button>`)}
+  return `<div class="wrap">${head('Clean', last, `<select id="cdrv" aria-label="Drive to clean">${S.drives.map((d) => `<option value="${esc(d.letter)}" ${d.letter === S.cleanDrive ? 'selected' : ''}>${esc(d.letter)} · ${txt(d.free)} free</option>`).join('')}</select><button class="btn line" data-a="selall" title="Everything except the Recycle Bin">Select all</button><button class="btn line" data-a="selnone">Select none</button><button class="btn line" data-a="rescan" ${S.scanning ? 'disabled' : ''}>Rescan</button>`)}
     <div class="card"><div class="row cl h"><span></span><span>Item</span><span>Status</span><span class="r">Size</span></div>${sc ? rows : skeleton()}</div>
     ${isC ? `<section><h2>System tasks <span>Run with this app's administrator rights</span></h2><div class="card">
       <div class="row sm2" style="grid-template-columns:1fr 130px"><div class="n"><b>Component store cleanup</b><small>DISM StartComponentCleanup. Removes superseded Windows files. Takes a few minutes.</small></div><div class="r"><button class="btn sm line" data-a="admin" data-t="dism">Run</button></div></div>
@@ -189,21 +216,23 @@ function vMoved() {
     <div class="card"><div class="row hs h"><span>Original path</span><span>Now stored at</span><span class="r">Size</span><span>Status</span><span></span></div>${S.moved ? rows : skeleton()}</div>${fsec}</div>`;
 }
 
-function readSettings() { return { auto_scan: $('#s_auto').checked, every_days: +$('#s_days').value || 7, auto_clean: $('#s_clean').checked, update_url: $('#s_url').value, tray_on_close: !!$('#s_tray')?.checked }; }
+function readSettings() { return { auto_scan: $('#s_auto').checked, every_days: +$('#s_days').value || 7, auto_clean: $('#s_clean').checked, // locked boxes show the saved values, so saving leaves the schedule alone
+   update_url: $('#s_url').value, tray_on_close: !!$('#s_tray')?.checked }; }
 function vSettings() {
   const s = S.settings, i = S.info, u = S.upd;
   if (!s) return `<div class="wrap">${head('Settings')}${skeleton()}</div>`;
   const ls = S.lastScan;
+  const locked = !!S.inst && !S.inst.schedulable;
   const lastTxt = ls ? `Last scheduled scan ${new Date(ls.when * 1000).toLocaleString()}: <b>${txt(ls.cleanable)}</b> cleanable${ls.auto_clean ? `, <b>${txt(ls.freed)}</b> cleaned` : ''}.` : 'No scheduled scan has run yet.';
   const updMsg = u ? (u.error ? `<span class="pill no">${esc(u.error)}</span>` : u.available ? `<span class="pill ok">${esc(u.latest)} available${u.delta ? ' (small delta download)' : ' (full download)'}</span>` : '<span class="pill">Up to date</span>') : '';
   const inp = 'height:36px;border:1px solid var(--control);border-radius:6px;padding:0 10px;font:inherit;background:var(--surface)';
   return `<div class="wrap">${head('Settings', `Lighten ${esc(i?.version || '')}`)}
     ${generalHtml()}
     <section><h2>Scheduled scan <span>${lastTxt}</span></h2><div class="card">
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Scan in the background</b><small style="white-space:normal">Creates a Windows Task Scheduler job that runs Lighten with administrator rights and no window, even when the app is closed. Each run measures what is cleanable, saves a free-space reading for the Overview chart, and shows a notification when a lot can be cleaned or free space drops sharply. Turn it off to remove the job.</small></div><input type="checkbox" id="s_auto" aria-label="Scan in the background" ${s.auto_scan ? 'checked' : ''}></div>
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Repeat every</b><small style="white-space:normal">Days between scans, 1 to 30. More frequent scans give the growth chart and the sudden-drop alert finer detail; each scan takes under a minute.</small></div><input id="s_days" aria-label="Repeat every, in days" type="number" min="1" max="30" value="${s.every_days || 7}" style="${inp};width:70px"></div>
-      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Also clean the safe set</b><small style="white-space:normal">After each scan, delete the items that are ticked by default on the Clean page (temp files, shader caches, logs and similar that apps rebuild). It never empties the Recycle Bin, never touches browser data or the opt-in items, and skips anything in use or on your exclusion list. Off means scan and notify only.</small></div><input type="checkbox" id="s_clean" aria-label="Also clean the safe set" ${s.auto_clean ? 'checked' : ''}></div></div>
-      <p class="note"><button class="btn pri" data-a="savesettings">Save schedule</button> Applies the three settings above. Nothing changes until you press Save.</p></section>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Scan in the background</b><small style="white-space:normal">Creates a Windows Task Scheduler job that runs Lighten with administrator rights and no window, even when the app is closed. Each run measures what is cleanable, saves a free-space reading for the Overview chart, and shows a notification when a lot can be cleaned or free space drops sharply. Turn it off to remove the job.</small></div><input type="checkbox" id="s_auto" aria-label="Scan in the background" ${s.auto_scan ? 'checked' : ''} ${locked ? 'disabled' : ''}></div>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Repeat every</b><small style="white-space:normal">Days between scans, 1 to 30. More frequent scans give the growth chart and the sudden-drop alert finer detail; each scan takes under a minute.</small></div><input id="s_days" aria-label="Repeat every, in days" type="number" min="1" max="30" value="${s.every_days || 7}" style="${inp};width:70px" ${locked ? 'disabled' : ''}></div>
+      <div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>Also clean the safe set</b><small style="white-space:normal">After each scan, delete the items that are ticked by default on the Clean page (temp files, shader caches, logs and similar that apps rebuild). It never empties the Recycle Bin, never touches browser data or the opt-in items, and skips anything in use or on your exclusion list. Off means scan and notify only.</small></div><input type="checkbox" id="s_clean" aria-label="Also clean the safe set" ${s.auto_clean ? 'checked' : ''} ${locked ? 'disabled' : ''}></div></div>
+      <p class="note">${locked ? 'Needs the installed copy: press Install under General first. The task runs as administrator, and a program in a normal folder can be swapped by any other program.' : '<button class="btn pri" data-a="savesettings">Save schedule</button> Applies the three settings above. Nothing changes until you press Save.'}</p></section>
     <section><h2>Updates <span>${updMsg || (S.inst?.signing ? 'Signed updates required' : 'Signing key not built in: hash check only')}</span></h2><div class="card">
       <div class="row" style="grid-template-columns:1fr"><div class="n"><b>Update manifest URL</b><small style="white-space:normal">Leave empty to use the official releases on GitHub, or enter your own https link to a small JSON file that names the newest version. Lighten only accepts it if it is signed with the key built into this copy, and checks the download against its SHA-256. When a patch exists for your version only the difference is downloaded. Nothing is checked until you press the button.</small></div></div>
       <div class="row" style="grid-template-columns:1fr"><input id="s_url" aria-label="Update manifest URL" value="${esc(s.update_url)}" placeholder="Official GitHub releases" style="${inp};min-width:0;width:100%"></div></div>
@@ -222,6 +251,7 @@ function focusKey(el) {
 function render() {
   const y = view.scrollTop, k = focusKey(document.activeElement);
   view.innerHTML = views[cur](); view.scrollTop = y;
+  view.querySelectorAll('[data-mixed]').forEach((x) => { x.indeterminate = true; });
   if (k) view.querySelector(k)?.focus({ preventScroll: true });
 }
 async function go(v) {
@@ -287,12 +317,13 @@ async function doBack(path) {
 }
 async function loadDCats() {
   S.dcats = null; render();
-  try { S.dcats = await invoke('scan_clean', { drive: S.cleanDrive }); S.sel = new Set(S.dcats.filter((c) => c.default_on && !c.busy && c.bytes > 0).map((c) => c.id)); } catch (e) { toast(String(e), true); S.dcats = []; }
+  try { S.dcats = await invoke('scan_clean', { drive: S.cleanDrive }); S.sel = pickSel(S.dcats); } catch (e) { toast(String(e), true); S.dcats = []; }
   render();
 }
 function setCleanDrive(d) {
   S.cleanDrive = d;
-  if (d === 'C:') { S.sel = new Set((S.cats || []).filter((c) => c.default_on && !c.busy && c.bytes > 0).map((c) => c.id)); render(); } else loadDCats();
+  S.picked.delete('recycle'); // each drive has its own bin: never carry the tick across
+  if (d === 'C:') { S.sel = pickSel(S.cats); render(); } else loadDCats();
 }
 async function doClean() {
   const list = curCats() || [], drive = S.cleanDrive, isC = drive === 'C:';
@@ -311,6 +342,7 @@ async function doClean() {
       else if (isC) { try { localStorage.setItem('rp', '0'); } catch {} }
       const res = await invoke('clean', { ids, drive });
       S.last = { freed: res.reduce((a, r) => a + r.freed, 0), failed: res.reduce((a, r) => a + r.failed, 0) };
+      S.picked.delete('recycle'); // permanent: has to be ticked again each time
       dlg.close(); toast(`Freed ${txt(S.last.freed)}`);
       res.filter((r) => r.note).forEach((r) => toast(r.note, true));
       await refreshDrives();
@@ -327,8 +359,10 @@ document.addEventListener('click', async (e) => {
   const a = e.target.closest('[data-a]'); if (!a) return;
   const act = a.dataset.a;
   if (act === 'rescan') return S.cleanDrive === 'C:' ? scan() : loadDCats();
-  if (act === 'goclean') { S.cleanDrive = 'C:'; S.sel = new Set((S.cats || []).filter((c) => c.default_on && !c.busy && c.bytes > 0).map((c) => c.id)); return go('clean'); }
+  if (act === 'goclean') { S.cleanDrive = 'C:'; S.sel = pickSel(S.cats); return go('clean'); }
   if (act === 'clean') return doClean();
+  if (act === 'selall') return pick(groupIds('*'), true);
+  if (act === 'selnone') return pick((curCats() || []).map((c) => c.id), false);
   if (act === 'move') return doMove(a.dataset.p);
   if (act === 'back') return doBack(a.dataset.p);
   if (act === 'adopt') { try { await invoke('adopt_link', { src: a.dataset.p }); S.moved = await invoke('moved_list'); S.links = await invoke('find_links'); toast('Tracked'); } catch (er) { toast(String(er), true); } return render(); }
@@ -349,8 +383,15 @@ document.addEventListener('click', async (e) => {
     a.disabled = false;
   }
 });
+// Settings are drawn from S.settings, so typed values go there at once and survive a redraw.
+const SETTING_FIELDS = { s_auto: 'auto_scan', s_days: 'every_days', s_clean: 'auto_clean', s_url: 'update_url', s_tray: 'tray_on_close' };
+document.addEventListener('input', (e) => {
+  const k = SETTING_FIELDS[e.target.id];
+  if (k && S.settings) S.settings[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.type === 'number' ? +e.target.value : e.target.value;
+});
 document.addEventListener('change', (e) => {
-  if (e.target.dataset.c) { e.target.checked ? S.sel.add(e.target.dataset.c) : S.sel.delete(e.target.dataset.c); render(); }
+  if (e.target.dataset.c) { pick([e.target.dataset.c], e.target.checked); }
+  if (e.target.dataset.g) pick(groupIds(e.target.dataset.g), e.target.checked);
   if (e.target.id === 'drv') { S.moveDrive = e.target.value; render(); }
 });
 window.addEventListener('load', scan);
@@ -359,4 +400,8 @@ window.addEventListener('load', async () => {
   let p = null; try { p = await invoke('launch_path'); } catch {}
   if (p) { await go('explore'); loadExplore(p); }
 });
-setInterval(() => { if (!dlg.open && !S.scanning && document.visibilityState === 'visible' && cur !== 'explore') scan(); }, 30 * 60 * 1000);
+setInterval(() => { if (!dlg.open && !S.scanning && document.visibilityState === 'visible' && ['overview', 'clean', 'move'].includes(cur)) scan(); }, 30 * 60 * 1000);
+window.addEventListener('load', async () => {
+  let removed = false; try { removed = await invoke('check_schedule'); } catch {}
+  if (removed) openDlg(`<h3>Scheduled scan turned off</h3><p class="mut">The old task ran a copy of Lighten that any program could replace, with administrator rights. To turn it on again: Settings, Install, then Scheduled scan.</p><div class="foot"><button class="btn pri" data-close>OK</button></div>`);
+});

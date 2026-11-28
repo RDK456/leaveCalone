@@ -1,12 +1,15 @@
 {
   "productName": "Lighten",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "identifier": "app.lighten.cleaner",
   "build": { "frontendDist": "./dist" },
   "app": {
     "withGlobalTauri": true,
     "windows": [{ "label": "main", "title": "Lighten", "width": 1240, "height": 820, "minWidth": 900, "minHeight": 620 }],
-    "security": { "csp": null }
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'",
+      "dangerousDisableAssetCspModification": ["style-src"]
+    }
   },
   "bundle": { "active": false, "icon": ["icons/icon.ico"] }
 }

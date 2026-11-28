@@ -11,9 +11,11 @@
 
 A certificate has to be issued to a verified person or organization, so this cannot be generated from the repo. Options:
 
-- **SignPath Foundation**: free signing for open-source projects. Needs a public repo with an OSI-approved license (this repo has no license file yet) and an application.
+- **SignPath Foundation**: free signing for open-source projects. Needs a public repo with an OSI-approved license (this repo is MIT) and an application. See their [terms](https://signpath.org/terms).
 - **Azure Trusted Signing**: pay-as-you-go, needs an Azure account and identity validation.
-- **A commercial certificate** (OV or EV): EV removes the SmartScreen warning at once; OV builds reputation over time.
+- **A commercial certificate** (OV or EV).
+
+No option removes the SmartScreen warning at once: reputation builds over releases signed by the same publisher ([Microsoft](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)).
 
 Once you have one, sign the release build before uploading it:
 

@@ -24,20 +24,26 @@ function dropBanner(g) {
   const why = g.unexplained > g.drop / 2
     ? `The folders Lighten tracks explain only ${txt(g.drop - g.unexplained)} of it. <button class="link" data-v="explore">Run Fast scan in Explore</button> to find the rest, including files Windows hides.`
     : 'The "Grew most" list shows where it went.';
-  return `<div class="alert"><b>Free space on C: fell by ${txt(g.drop)}</b> since ${dateOf(g.since)}. ${why}</div>`;
+  return `<p><b>Free space on C: fell by ${txt(g.drop)}</b> since ${dateOf(g.since)}. ${why}</p>`;
 }
 // ---------- hidden-space warning and cleanup history ----------
-S.lastHidden = []; S.actions = [];
+S.lastHidden = []; S.actions = []; S.allHistory = false;
 function hiddenWarning() {
   return (S.lastHidden || []).filter((h) => Date.now() / 1000 - h.when < 30 * 86400)
-    .map((h) => `<div class="alert"><b>${txt(h.bytes)} on ${esc(h.drive)} is used by ${h.files} file(s) Windows cannot find.</b> Seen by the Fast scan on ${dateOf(h.when)}. <button class="link" data-v="explore">Fast scan ${esc(h.drive)} again</button> to check and fix it.</div>`).join('');
+    .map((h) => `<p><b>${txt(h.bytes)} on ${esc(h.drive)} is used by ${h.files} ${h.files === 1 ? 'file' : 'files'} Windows cannot find.</b> Seen by the Fast scan on ${dateOf(h.when)}. <button class="link" data-v="explore">Fast scan ${esc(h.drive)} again</button> to check and fix it.</p>`).join('');
+}
+/** Every warning in one box. */
+function attentionHtml() {
+  const body = hiddenWarning() + (S.growth ? dropBanner(S.growth) : '');
+  return body ? `<div class="alert" role="note">${body}</div>` : '';
 }
 function historyHtml() {
   const l = S.actions || [];
   if (!l.length) return '';
   const total = l.filter((a) => a.freed).reduce((s, a) => s + a.bytes, 0);
-  const rows = l.slice(0, 8).map((a) => `<div class="row" style="grid-template-columns:1fr 100px 110px"><div class="n"><b>${esc(a.what)}</b><small>${a.items ? `${a.items.toLocaleString()} item(s)` : ''}${a.freed ? '' : ' · space is freed when the Recycle Bin is emptied'}</small></div><div class="r mut">${dateOf(a.when)}</div><div class="r">${fmt(a.bytes)}</div></div>`).join('');
-  return `<section><h2>Recent cleanups <span>${txt(total)} freed or moved in the last ${l.length} action(s)</span></h2><div class="card">${rows}</div></section>`;
+  const shown = S.allHistory ? 20 : 3;
+  const rows = l.slice(0, shown).map((a) => `<div class="row" style="grid-template-columns:1fr 100px 110px"><div class="n"><b>${esc(a.what)}</b><small>${a.items ? `${a.items.toLocaleString()} item(s)` : ''}${a.freed ? '' : ' · space is freed when the Recycle Bin is emptied'}</small></div><div class="r mut">${dateOf(a.when)}</div><div class="r">${fmt(a.bytes)}</div></div>`).join('');
+  return `<section><h2>Recent cleanups <span>${txt(total)} freed or moved in the last ${l.length} action(s)</span></h2><div class="card">${rows}</div>${l.length > 3 ? `<p class="note"><button class="link" data-ta="history">${S.allHistory ? 'Show fewer' : 'Show more'}</button></p>` : ''}</section>`;
 }
 async function loadExtras() {
   try { [S.lastHidden, S.actions] = await Promise.all([invoke('last_hidden'), invoke('clean_history')]); } catch {}
@@ -45,9 +51,7 @@ async function loadExtras() {
 }
 function growthHtml() {
   const g = S.growth;
-  if (!g) return '';
-  const banner = dropBanner(g);
-  return banner + growthBody(g);
+  return g ? growthBody(g) : '';
 }
 function growthBody(g) {
   if (g.series.length < 2) return `<section><h2>Growth</h2><div class="card"><div class="empty">Needs two scans to show what grew. Lighten records one when it opens (every 6 hours) and on each scheduled scan.</div></div></section>`;
@@ -71,21 +75,29 @@ function vApps() {
 }
 
 // ---------- System ----------
-S.sys = null;
+S.sys = null; S.ai = [];
+function aiHtml() {
+  if (!S.ai.length) return '';
+  const rows = S.ai.map((m) => sysRow(`${esc(m.name)} <span class="u">${txt(m.bytes)}</span>`, esc(m.path), `<button class="btn sm line" data-a="reveal" data-p="${esc(m.path)}">Open folder</button>`)).join('');
+  return `<section><h2>AI models <span>Sizes only. Lighten never deletes models; remove them with the app that downloaded them</span></h2><div class="card">${rows}</div></section>`;
+}
+async function loadAi() { try { S.ai = await invoke('ai_models'); } catch { S.ai = []; } if (cur === 'system') render(); }
 function sysRow(title, sub, btns) { return `<div class="row" style="grid-template-columns:1fr auto"><div class="n"><b>${title}</b><small style="white-space:normal">${sub}</small></div><div class="r" style="display:flex;gap:8px">${btns || ''}</div></div>`; }
 function vSystem() {
   const s = S.sys;
   if (!s) return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.')}${skeleton()}</div>`;
   const b = (t, label, a = '') => `<button class="btn sm line" data-sa="${t}" ${a}>${label}</button>`;
-  const wo = s.windows_old ? sysRow(`Windows.old <span class="u">${txt(s.windows_old)}</span>`, 'Your previous Windows. Removing it means you cannot roll back to that version. Windows deletes it itself after about 10 days.', b('winold', 'Remove…')) : sysRow('Windows.old', 'Not present.', '');
+  const wo = s.windows_old ? sysRow(`Windows.old <span class="u">${txt(s.windows_old)}</span>`, 'Your previous Windows. Removing it means you cannot roll back to that version. Windows deletes it itself after about 10 days.', b('winold', 'Remove…')) : '';
   const hib = sysRow(`Hibernation file <span class="u">${s.hiber ? txt(s.hiber) : 'off'}</span>`, 'Turning hibernation off frees this file and also disables Fast Startup.', s.hiber ? b('hiber_off', 'Turn off…') : b('hiber_on', 'Turn on'));
   const pf = sysRow('Page file', s.pagefile.length ? s.pagefile.map(esc).join('<br>') : 'System managed. Shrinking it is not recommended, so Lighten only reports it.', '');
-  const dk = s.docker ? sysRow('Docker', s.docker.map(esc).join('<br>') || 'No data', b('docker_prune', 'Prune unused') + b('docker_prune_all', 'Prune all unused…')) : sysRow('Docker', 'Not installed or not running.', '');
-  const vh = s.vhdx.length ? s.vhdx.map((v) => sysRow(`Virtual disk <span class="u">${txt(v.bytes)}</span>`, esc(v.path), b('wsl_compact', 'Compact…', `data-p="${esc(v.path)}"`))).join('') : sysRow('WSL and Docker disks', 'None found.', '');
+  const dk = s.docker ? sysRow('Docker', s.docker.map(esc).join('<br>') || 'No data', b('docker_prune', 'Prune unused') + b('docker_prune_all', 'Prune all unused…')) : '';
+  const vh = s.vhdx.map((v) => sysRow(`Virtual disk <span class="u">${txt(v.bytes)}</span>`, esc(v.path), b('wsl_compact', 'Compact…', `data-p="${esc(v.path)}"`))).join('');
   const rp = sysRow(`Restore points ${s.restore_used ? `<span class="u">${esc(s.restore_used)} used</span>` : ''}`, 'Create a Windows restore point now, or delete the old ones to free the space they hold. Windows allows one new point every 24 hours, and System Protection must be on.', b('restore_point', 'Create') + b('restore_delete', 'Delete all…'));
-  const kr = sysRow(`Windows crash reports <span class="u">${txt(s.kernel_reports || 0)}</span>`, 'Memory dumps Windows keeps after hardware or driver hiccups (LiveKernelReports). Safe to clear; Windows writes new ones only if the problem happens again.', s.kernel_reports ? b('kernel_reports', 'Clear…') : '');
+  const kr = s.kernel_reports ? sysRow(`Windows crash reports <span class="u">${txt(s.kernel_reports)}</span>`, 'Memory dumps Windows keeps after hardware or driver hiccups (LiveKernelReports). Safe to clear; Windows writes new ones only if the problem happens again.', b('kernel_reports', 'Clear…')) : '';
   const ck = sysRow('Check disk for errors', 'A read-only scan of C: for file-system problems, run while Windows is in use. Takes under a minute on most PCs and changes nothing.', b('disk_scan_check', 'Scan'));
-  return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.', `<button class="btn line" data-sa="refresh">Refresh</button>`)}<div class="card">${wo}${hib}${pf}${dk}${vh}${winsxsRow()}${kr}${rp}${ck}</div>${startupHtml()}</div>`;
+  return `<div class="wrap">${head('System', 'Needs administrator rights, which Lighten already has.', `<button class="btn line" data-sa="refresh">Refresh</button>`)}
+    <section style="margin-top:0"><h2>Free up space</h2><div class="card">${wo}${s.hiber ? hib : ''}${winsxsRow()}${kr}${dk}${vh}</div></section>${aiHtml()}
+    <section><h2>Safety and health</h2><div class="card">${rp}${ck}${s.hiber ? '' : hib}${pf}</div></section>${startupHtml()}</div>`;
 }
 const SYS_WARN = {
   winold: 'Permanently deletes C:\\Windows.old. You will not be able to go back to the previous Windows version.',
@@ -122,7 +134,7 @@ window.hooks = {};
 window.onGo = async (v) => {
   if (v === 'overview') { loadGrowth(); loadExtras(); }
   if (v === 'apps' && !S.apps) { S.apps = null; render(); try { S.apps = await invoke('apps_list'); } catch (e) { toast(String(e), true); S.apps = []; } }
-  if (v === 'system') { S.sys = null; S.startup = null; render(); loadStartup(); try { S.sys = await invoke('system_info'); } catch (e) { toast(String(e), true); } }
+  if (v === 'system') { S.sys = null; S.startup = null; render(); loadStartup(); loadAi(); try { S.sys = await invoke('system_info'); } catch (e) { toast(String(e), true); } }
   if (v === 'find' && !S.profile) { try { S.profile = await invoke('profile_dir'); } catch {} }
   if (v !== 'explore' && S.fast) { S.fast = null; invoke('disk_release').catch(() => {}); }
   if (v === 'settings') { try { [S.inst, S.menu] = await Promise.all([invoke('install_state'), invoke('shell_menu_state')]); } catch {} }
@@ -147,8 +159,12 @@ document.addEventListener('click', async (e) => {
   if (ap) {
     if (ap.dataset.ap === 'move') return doMove(ap.dataset.p);
     const app = (S.apps || []).find((x) => x.id === ap.dataset.id);
-    openDlg(`<h3>Uninstall ${esc(app?.name)}?</h3><p class="mut">This opens the app's own uninstaller.</p><div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">Open uninstaller</button></div>`);
-    $('#go').onclick = async () => { try { await invoke('uninstall_app', { id: ap.dataset.id }); dlg.close(); toast('Uninstaller opened'); } catch (er) { toast(String(er), true); } };
+    if (!app) return;
+    const what = app.per_user
+      ? `<p class="mut">This app was added for your account only, so any program could have written its uninstall command. Lighten will not run it as administrator. Windows' Installed apps opens instead; uninstall it there.</p>`
+      : `<p class="mut">Runs the app's own uninstaller as administrator:</p><div class="path">${esc(app.uninstall)}</div>`;
+    openDlg(`<h3>Uninstall ${esc(app.name)}?</h3>${what}<div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">${app.per_user ? 'Open Installed apps' : 'Run uninstaller'}</button></div>`);
+    $('#go').onclick = async () => { try { const settings = await invoke('uninstall_app', { id: app.id }); dlg.close(); toast(settings ? 'Opened Windows Installed apps' : 'Uninstaller opened'); } catch (er) { toast(String(er), true); } };
     return;
   }
   const sa = e.target.closest('[data-sa]');
@@ -156,6 +172,7 @@ document.addEventListener('click', async (e) => {
   const ta = e.target.closest('[data-ta]');
   if (ta) {
     const k = ta.dataset.ta;
+    if (k === 'history') { S.allHistory = !S.allHistory; return render(); }
     if (k === 'menu') { try { S.menu = await invoke('shell_menu_set', { on: !S.menu }); toast(S.menu ? 'Added to the right-click menu' : 'Removed from the right-click menu'); } catch (er) { toast(String(er), true); } return render(); }
     if (k === 'report') { try { const p = await invoke('export_report'); toast('Saved ' + p); invoke('reveal_file', { path: p }); } catch (er) { toast(String(er), true); } return; }
     if (k === 'install') { try { await invoke('install_app'); } catch (er) { toast(String(er), true); } return; }

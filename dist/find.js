@@ -1,5 +1,5 @@
 // Find files: nine finders in one view. Loaded before tools.js; shares globals with app.js.
-const FT = { large: 'Large files', dupes: 'Duplicates', photos: 'Similar photos', installers: 'Installers', dev: 'Dev leftovers', empty: 'Empty folders', shortcuts: 'Broken shortcuts', onedrive: 'OneDrive', undo: 'Undo' };
+const FT = { large: 'Large files', dupes: 'Duplicates', photos: 'Photos', installers: 'Installers', onedrive: 'OneDrive', dev: 'Dev leftovers', empty: 'Empty folders', shortcuts: 'Shortcuts' };
 const FCFG = { large: ['root', 'min'], dupes: ['root', 'min'], photos: ['root', 'dist', 'cap'], installers: ['days'], dev: ['root', 'days'], empty: ['root'], shortcuts: [], onedrive: [], undo: [] };
 const FAUTO = ['shortcuts', 'onedrive', 'undo']; // nothing to choose: they run when opened
 const FNOTE = {
@@ -15,6 +15,7 @@ const FNOTE = {
 };
 S.find = { q: '', run: 0, tab: 'large', root: 'C:\\Users', min: 100, days: 90, dist: 4, cap: 6000, res: null, busy: false, sel: new Set(), size: new Map(), perm: false, roots: [] };
 S.profile = null;
+document.addEventListener('input', (e) => { if (e.target.id === 'f_root') S.find.root = e.target.value; });
 const isGrp = () => S.find.tab === 'dupes' || S.find.tab === 'photos';
 
 function findTab(k) {
@@ -58,7 +59,8 @@ function colHead() {
 }
 function vFind() {
   const f = S.find, cfg = FCFG[f.tab];
-  const tabs = Object.entries(FT).map(([k, v]) => `<button class="tab ${f.tab === k ? 'on' : ''}" data-ft="${k}"${f.tab === k ? ' aria-current="true"' : ''}>${v}</button>`).join('');
+  const tabs = Object.entries(FT).map(([k, v]) => `${k === 'dev' ? '<span class="tsep" aria-hidden="true"></span>' : ''}<button class="tab ${f.tab === k ? 'on' : ''}" data-ft="${k}"${f.tab === k ? ' aria-current="true"' : ''}>${v}</button>`).join('');
+  const undo = `<button class="btn line" data-ft="undo"${f.tab === 'undo' ? ' aria-current="true" disabled' : ''}>Recently deleted</button>`;
   const roots = driveRoots().map((r) => `<option value="${esc(r)}">`).join('');
   const bar = `<div class="bar2">${cfg.includes('root') ? `<input class="t" id="f_root" list="roots" value="${esc(f.root)}" style="width:240px" aria-label="Folder to scan"><datalist id="roots">${roots}</datalist>` : ''}
     ${cfg.includes('min') ? `<select id="f_min" aria-label="Minimum size">${[10, 100, 500, 1000].map((m) => `<option value="${m}" ${f.min === m ? 'selected' : ''}>Over ${m >= 1000 ? '1 GB' : m + ' MB'}</option>`).join('')}</select>` : ''}
@@ -83,7 +85,7 @@ function vFind() {
   const act = { dev: 'Delete folders', empty: 'Remove folders', onedrive: 'Free up space', undo: 'Restore' }[f.tab] || (f.perm ? 'Delete permanently' : 'Move to Recycle Bin');
   const permOk = !['dev', 'empty', 'onedrive', 'undo'].includes(f.tab);
   const sized = !['empty', 'shortcuts', 'undo'].includes(f.tab);
-  return `<div class="wrap">${head('Find files', FNOTE[f.tab])}<div class="tabs">${tabs}</div>${bar}${body}</div>
+  return `<div class="wrap">${head(f.tab === 'undo' ? 'Recently deleted' : 'Find files', FNOTE[f.tab], undo)}<div class="tabs">${tabs}</div>${bar}${body}</div>
     <div class="bottom"><div class="wrap"><span>Selected <b>${f.sel.size}</b>${sized ? ` · <b>${txt(sb)}</b>` : ''}${f.q && hiddenSelected() ? ` <span class="pill warn">${hiddenSelected()} hidden by search</span>` : ''}${permOk ? ` <label style="margin-left:16px"><input type="checkbox" id="f_perm" ${f.perm ? 'checked' : ''}> Delete permanently</label>` : ''}</span><button class="btn pri" data-fa="do" ${f.sel.size ? '' : 'disabled'}>${act}</button></div></div>`;
 }
 function fileRow(h) {
@@ -136,7 +138,7 @@ function findDo() {
   openDlg(`<h3>${T[0]} ${paths.length} item(s)${showSize ? ', ' + txt(sb) : ''}?</h3>
     <ul>${paths.slice(0, 6).map((p) => `<li style="word-break:break-all">${esc(p)}</li>`).join('')}${paths.length > 6 ? `<li>and ${paths.length - 6} more</li>` : ''}</ul>
     ${unseen ? `<div class="problems">${unseen} of these are hidden by your search and are included.</div>` : ''}
-    ${kind === 'dev' || perm ? `<div class="problems">${esc(T[1])}</div>` : `<p class="mut">${kind === 'trash' ? 'You can restore them from the Recycle Bin, or from Undo here. Space is freed when it is emptied.' : esc(T[1])}</p>`}
+    ${kind === 'dev' || perm ? `<div class="problems">${esc(T[1])}</div>` : `<p class="mut">${kind === 'trash' ? 'You can restore them from the Recycle Bin, or from Recently deleted here. Space is freed when it is emptied.' : esc(T[1])}</p>`}
     <div class="foot"><button class="btn line" data-close>Cancel</button><button class="btn pri" id="go">${T[0].replace(' on', '')}</button></div>`);
   $('#go').onclick = async () => {
     $('#go').disabled = true; $('#go').textContent = 'Working…';

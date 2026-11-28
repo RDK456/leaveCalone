@@ -26,7 +26,7 @@ A fast, no-nonsense Windows disk cleaner. Finds junk, big files, duplicates and 
 ## Features
 
 ### Clean
-30 categories: temp files, shader caches, npm/pip/NuGet/Cargo/Yarn/Gradle caches, Chrome/Edge/Brave/Firefox/Discord/Slack/Teams/Spotify/VS Code caches, Steam, Epic Games and Adobe media caches, thumbnail cache, Windows Update cache, Delivery Optimization, crash dumps, NVIDIA installers, logs and the Recycle Bin. Running apps are detected and skipped.
+32 categories in five groups, with select all and none: temp files, shader caches, npm/pnpm/pip/uv/NuGet/Cargo/Yarn/Gradle caches, Chrome/Edge/Brave/Firefox/Discord/Slack/Teams/Spotify/VS Code caches, Steam, Epic Games and Adobe media caches, thumbnail cache, Windows Update cache, Delivery Optimization, crash dumps, NVIDIA installers, logs and the Recycle Bin. Running apps are detected and skipped. Your ticks survive a rescan.
 
 ![Clean](docs/screenshots/clean.png)
 
@@ -43,17 +43,18 @@ Move AppData folders, profile folders and Program Files apps to D: (or any drive
 ![Move](docs/screenshots/move.png)
 
 ### Find anything wasting space
-Nine finders in one place:
+Eight finders in one place:
 
 - **Large files**: reads the NTFS file table directly, so a whole drive takes seconds
 - **Duplicates**: matched by size, partial hash, then full SHA-256
 - **Similar photos**: resized or re-saved copies, matched by a visual fingerprint
-- **Installers**: old `.exe`, `.msi`, `.iso` in Downloads
+- **Installers**: old installers in Downloads, Desktop and Documents, wherever Windows keeps them (OneDrive too)
 - **Dev leftovers**: idle `node_modules`, Rust `target` and Python venv folders
 - **Empty folders**: only folders with nothing inside, nothing pre-selected
 - **Broken shortcuts**: Desktop and Start menu links whose target is gone
 - **OneDrive**: free up space on files that stay in the cloud
-- **Undo**: restore anything Lighten sent to the Recycle Bin
+
+**Recently deleted** restores anything Lighten sent to the Recycle Bin.
 
 Deletes go to the **Recycle Bin first**. Permanent delete is opt-in.
 
@@ -71,12 +72,12 @@ Fast scan reads the NTFS file table, then every folder opens instantly. Switch b
 ![Explore](docs/screenshots/explore.png)
 
 ### Apps
-Installed apps with size and last-used date. Uninstall, or move a large app to another drive.
+Installed apps with size and last-used date. Uninstall, or move a large app to another drive. The uninstall command is shown first; apps installed for your account only open Windows' Installed apps page, so their uninstaller never runs as administrator.
 
 ![Apps](docs/screenshots/apps.png)
 
 ### System
-Windows.old, hibernation file, pagefile info, Docker prune, WSL/Docker disk compaction, a restore point before big cleans, a real-size report of the WinSxS component store, and your startup apps with one-click on/off.
+Windows.old, hibernation file, pagefile info, Docker prune, WSL/Docker disk compaction, a restore point before big cleans, a real-size report of the WinSxS component store, and your startup apps with one-click on/off. Shows how much space Ollama, Hugging Face and LM Studio models use (never deleted).
 
 ![System](docs/screenshots/system.png)
 
@@ -86,7 +87,7 @@ See everything you moved, its status, and restore it. Track free space over time
 ![Moved](docs/screenshots/moved.png)
 
 ### Automation
-- Scheduled background scan via Task Scheduler, with a toast notification
+- Scheduled background scan via Task Scheduler, with a toast notification (installed copy only)
 - Optional auto-clean of the safe set only
 - Tray icon, close-to-tray
 - Light and dark theme
@@ -113,6 +114,10 @@ See everything you moved, its status, and restore it. Track free space over time
 - Recycle Bin deletes are logged, so Undo can put them back.
 - OneDrive "free up space" only touches synced placeholders; files not yet uploaded are refused.
 - Empty folders are only removed if they are still empty at that moment.
+- Windows tools are started by full path, so a look-alike program beside Lighten is never run.
+- Admin scripts and file lists are passed in memory, never through files another program could swap.
+- The scheduled task only runs the copy in Program Files. A task made by an older version that runs another copy is removed.
+- A content security policy blocks outside and injected scripts.
 - Moves are journaled in `%LOCALAPPDATA%\Lighten\moves.json`.
 
 ## Install
@@ -143,8 +148,10 @@ Code signing and a winget package are documented in [docs/SIGNING.md](docs/SIGNI
 Push a tag that matches the version in `Cargo.toml`. GitHub Actions tests, builds and creates a **draft** release for you to publish. Add the optional secrets named at the top of the workflow file to include the signed update manifest and a code signature. To build the manifest by hand:
 
 ```powershell
-.\scripts\make-latest.ps1 -Exe .\Lighten.exe -Version 0.1.2 -KeyFile .\keys\update.key
+.\scripts\make-latest.ps1 -Exe .\Lighten.exe -Version 0.1.3 -KeyFile .\keys\update.key
 ```
+
+Add `-PreviousExe` and `-PreviousVersion` to also write a small patch from the last release; upload it too.
 
 The app looks for `latest.json` on the newest release unless you set another address, so upload it with every release.
 
@@ -160,4 +167,8 @@ lighten.exe --sign key.txt 0.0.2 <sha256> sig.txt
 
 ## Status
 
-v0.1.2, early. Tested: scanning, delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, and the UI. Real deletes, restore points, install and updater restart need more testing on varied machines. Back up what matters and use the dry-run report first.
+v0.1.3, early. Tested: scanning, delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, and the UI. Real deletes, restore points, install and updater restart need more testing on varied machines. Back up what matters and use the dry-run report first.
+
+## License
+
+[MIT](LICENSE)

@@ -6,6 +6,8 @@
 mod extra;
 mod more;
 mod tools;
+mod launch;
+use launch::{ps_command, sys_cmd};
 use serde::{Deserialize, Serialize};
 use std::os::windows::{fs::MetadataExt, process::CommandExt};
 use std::{
@@ -30,7 +32,7 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 fn run(cmd: &str, args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new(cmd).args(args).creation_flags(NO_WINDOW).output().map_err(|e| format!("{cmd}: {e}"))
+    sys_cmd(cmd).args(args).output().map_err(|e| format!("{cmd}: {e}"))
 }
 fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl std::future::Future<Output = Result<T, String>> {
     async move { tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string()) }
@@ -244,6 +246,8 @@ fn cats() -> Vec<Cat> {
         Cat { id: "slack", name: "Slack cache", desc: "Cached images and code. Your login and messages are untouched.", roots: vec![roam.join(r"Slack\Cache"), roam.join(r"Slack\Code Cache"), roam.join(r"Slack\GPUCache")], min_age: 0, admin: false, procs: &["slack"], default_on: false },
         Cat { id: "gradle", name: "Gradle cache", desc: "Downloaded Android and Java build dependencies. Re-downloaded on the next build, which needs internet.", roots: vec![prof.join(r".gradle\caches")], min_age: 0, admin: false, procs: &["java", "gradle", "studio64"], default_on: false },
         Cat { id: "yarn", name: "Yarn cache", desc: "Downloaded packages. Re-fetched when needed.", roots: vec![local.join(r"Yarn\Cache")], min_age: 0, admin: false, procs: &["yarn", "node"], default_on: false },
+        Cat { id: "pnpm", name: "pnpm cache and store", desc: "Downloaded packages. Projects keep working; the next install downloads again. Files shared with projects free less than shown.", roots: vec![local.join("pnpm-cache"), local.join(r"pnpm\store")], min_age: 0, admin: false, procs: &["pnpm", "node"], default_on: false },
+        Cat { id: "uv", name: "uv cache", desc: "Downloaded Python packages. Fetched again when needed. Files shared with environments free less than shown; environments made with symlinks would break.", roots: vec![local.join(r"uv\cache")], min_age: 0, admin: false, procs: &["uv", "uvx"], default_on: false },
         Cat { id: "wutemp", name: "Windows Update download cache", desc: "Already-installed update packages. ", roots: vec![win.join(r"SoftwareDistribution\Download")], min_age: 0, admin: false, procs: &[], default_on: true },
         Cat { id: "do", name: "Delivery Optimization cache", desc: "Windows update files shared with other PCs. ", roots: vec![pd.join(r"Microsoft\Windows\DeliveryOptimization\Cache")], min_age: 0, admin: false, procs: &[], default_on: true },
         Cat { id: "wintemp", name: "Windows temp files", desc: "System-wide temp folder. ", roots: vec![win.join("Temp")], min_age: 3600, admin: false, procs: &[], default_on: true },
@@ -263,7 +267,8 @@ struct CatInfo {
 }
 fn recycle_bytes() -> u64 {
     let ps = "(New-Object -ComObject Shell.Application).NameSpace(0xA).Items() | ForEach-Object { $_.Size } | Measure-Object -Sum | ForEach-Object { [int64]$_.Sum }";
-    run("powershell", &["-NoProfile", "-Command", ps])
+    ps_command(ps)
+        .output()
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
         .unwrap_or(0)
@@ -301,7 +306,7 @@ fn clean_drive(l: char, ids: Vec<String>) -> Vec<CleanResult> {
             "recycle" => {
                 let rb = PathBuf::from(format!("{l}:\\$Recycle.Bin"));
                 let before = dir_size(&rb, 0).bytes;
-                let _ = run("powershell", &["-NoProfile", "-Command", &format!("Clear-RecycleBin -DriveLetter {l} -Force -ErrorAction SilentlyContinue")]);
+                let _ = launch::run_ps(&format!("Clear-RecycleBin -DriveLetter {l} -Force -ErrorAction SilentlyContinue"));
                 r.freed = before.saturating_sub(dir_size(&rb, 0).bytes);
             }
             _ => r.note = Some("Unknown category".into()),
@@ -404,7 +409,7 @@ fn do_clean_inner(ids: Vec<String>, drive: &str) -> Vec<CleanResult> {
             let mut r = CleanResult { id: id.clone(), ..Default::default() };
             if id == "recycle" {
                 let before = recycle_bytes();
-                let _ = run("powershell", &["-NoProfile", "-Command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"]);
+                let _ = launch::run_ps("Clear-RecycleBin -Force -ErrorAction SilentlyContinue");
                 r.freed = before.saturating_sub(recycle_bytes());
             } else if let Some(c) = cats().into_iter().find(|c| c.id == id) {
                 if let Some(p) = busy_of(&c, &procs) {
@@ -570,10 +575,10 @@ fn save_journal(v: &[MoveRec]) -> Result<(), String> {
 }
 
 fn robocopy(src: &Path, dest: &Path) -> Result<(), String> {
-    let o = Command::new("robocopy")
+    let o = sys_cmd("robocopy")
         .arg(src).arg(dest)
         .args(["/E", "/COPY:DAT", "/DCOPY:DAT", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP"])
-        .creation_flags(NO_WINDOW).output().map_err(|e| e.to_string())?;
+        .output().map_err(|e| e.to_string())?;
     match o.status.code() {
         Some(c) if c < 8 => Ok(()),
         c => Err(format!("robocopy failed (code {c:?})")),
@@ -586,7 +591,7 @@ fn step(app: &AppHandle, key: &str, text: &str) {
     let _ = app.emit("move-step", serde_json::json!({ "key": key, "text": text }));
 }
 fn mk_junction(link: &Path, target: &Path) -> Result<(), String> {
-    let o = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).creation_flags(NO_WINDOW).output().map_err(|e| e.to_string())?;
+    let o = sys_cmd("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)) }
 }
 
@@ -759,9 +764,6 @@ async fn move_back(app: AppHandle, src: String) -> Result<(), String> {
 #[tauri::command]
 async fn admin_task(task: String) -> Result<String, String> {
     blocking(move || -> Result<String, String> {
-        let dir = envp("LOCALAPPDATA").join("Lighten");
-        let _ = fs::create_dir_all(&dir);
-        let log = dir.join("admin.log");
         let script = match task.as_str() {
             "dism" => "Dism.exe /Online /Cleanup-Image /StartComponentCleanup".to_string(),
             "update_cache" => "$ErrorActionPreference='Continue'; Stop-Service wuauserv,bits,dosvc -Force -ErrorAction SilentlyContinue; \
@@ -770,12 +772,9 @@ async fn admin_task(task: String) -> Result<String, String> {
             "wintemp" => "Get-ChildItem \"$env:SystemRoot\\Temp\" -Force | Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) -and -not ($_.Attributes -band 'ReparsePoint') } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue".to_string(),
             _ => return Err("Unknown task".into()),
         };
-        let ps1 = dir.join(format!("admin-{task}.ps1"));
-        fs::write(&ps1, format!("& {{ {script} }} *> '{}'\r\n'DONE' | Add-Content '{}'\r\n", log.display(), log.display())).map_err(|e| e.to_string())?;
-        let _ = fs::remove_file(&log);
-        let o = run("powershell", &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &ps1.to_string_lossy()])?;
+        let o = ps_command(&format!("& {{ {script} }} *>&1 | Out-String")).output().map_err(|e| e.to_string())?;
         if !o.status.success() { return Err("The task failed to run".into()); }
-        Ok(fs::read_to_string(&log).unwrap_or_default().trim().chars().rev().take(600).collect::<String>().chars().rev().collect())
+        Ok(tools::tail(String::from_utf8_lossy(&o.stdout).trim(), 600))
     })
     .await?
 }
@@ -874,8 +873,12 @@ const TASK: &str = "Lighten scan";
 fn apply_schedule(s: &Settings) -> Result<(), String> {
     apply_schedule_for(s, &std::env::current_exe().map_err(|e| e.to_string())?)
 }
+const NEEDS_INSTALL: &str = "Scheduled scans need the installed copy. Use Settings, Install first: the task runs as administrator, and a program in a normal folder can be swapped.";
 fn apply_schedule_for(s: &Settings, exe: &Path) -> Result<(), String> {
     if s.auto_scan {
+        if !launch::in_program_files(exe) {
+            return Err(NEEDS_INSTALL.into());
+        }
         let tr = format!("\"{}\" --scan", exe.display());
         let days = s.every_days.clamp(1, 30).to_string();
         let o = run("schtasks", &["/Create", "/TN", TASK, "/TR", &tr, "/SC", "DAILY", "/MO", &days, "/ST", "12:00", "/RL", "HIGHEST", "/F"])?;
@@ -887,6 +890,27 @@ fn apply_schedule_for(s: &Settings, exe: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+/// The program named in `schtasks /Query /XML` output.
+fn task_program(xml: &str) -> Option<String> {
+    let c = xml.split_once("<Command>")?.1.split_once("</Command>")?.0;
+    Some(c.trim().replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").trim_matches('"').to_string())
+}
+/// Removes a task made by an older version that runs a replaceable copy. True when one was removed.
+#[tauri::command]
+async fn check_schedule() -> Result<bool, String> {
+    blocking(drop_unsafe_task).await
+}
+fn drop_unsafe_task() -> bool {
+    let Ok(o) = run("schtasks", &["/Query", "/TN", TASK, "/XML"]) else { return false };
+    let Some(program) = task_program(&String::from_utf8_lossy(&o.stdout)) else { return false };
+    if launch::in_program_files(Path::new(&program)) || !run("schtasks", &["/Delete", "/TN", TASK, "/F"]).map(|o| o.status.success()).unwrap_or(false) {
+        return false;
+    }
+    let mut s = load_settings();
+    s.auto_scan = false;
+    let _ = write_settings(&s);
+    true
+}
 #[tauri::command]
 fn get_settings() -> Settings {
     load_settings()
@@ -895,8 +919,12 @@ fn get_settings() -> Settings {
 fn save_settings(mut s: Settings) -> Result<Settings, String> {
     s.every_days = s.every_days.clamp(1, 30);
     s.update_url = s.update_url.trim().to_string();
-    apply_schedule(&s)?;
-    s.exclusions = load_settings().exclusions; // edited only through set_exclusions
+    let old = load_settings();
+    // saving something else (the update address, say) must not touch the task
+    if s.auto_scan != old.auto_scan || (s.auto_scan && s.every_days != old.every_days) {
+        apply_schedule(&s)?;
+    }
+    s.exclusions = old.exclusions; // edited only through set_exclusions
     write_settings(&s)?;
     Ok(s)
 }
@@ -1064,12 +1092,13 @@ async fn apply_update(app: AppHandle) -> Result<(), String> {
         let new = exe.with_extension("update.exe");
         let bak = exe.with_extension("bak");
         fs::write(&new, &bytes).map_err(|e| e.to_string())?;
-        let q = |p: &Path| p.to_string_lossy().replace('\'', "''");
+        let q = |p: &Path| launch::ps_quote(&p.to_string_lossy());
         let script = format!(
             "Copy-Item -LiteralPath '{e}' -Destination '{b}' -Force; for($i=0;$i -lt 30;$i++){{ try{{ Move-Item -LiteralPath '{n}' -Destination '{e}' -Force -ErrorAction Stop; break }}catch{{ Start-Sleep 1 }} }}; Start-Process -FilePath '{e}'",
             e = q(&exe), b = q(&bak), n = q(&new)
         );
-        Command::new("powershell").args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]).creation_flags(NO_WINDOW | 0x8).spawn().map_err(|e| e.to_string())?;
+        // the new program inherits this environment, so give it the normal PATH back
+        ps_command(&script).env("PATH", std::env::var_os("PATH").unwrap_or_default()).creation_flags(NO_WINDOW | 0x8).spawn().map_err(|e| e.to_string())?;
         app.exit(0);
         Ok(())
     })
@@ -1091,7 +1120,7 @@ fn make_patch(a: &[String]) {
 
 #[tauri::command]
 fn open_in_explorer(path: String) {
-    let _ = Command::new("explorer").arg(path).spawn();
+    let _ = sys_cmd("explorer").arg(path).spawn();
 }
 
 /// `Lighten.exe --apply-patch old new-out patch`: offline apply, used to verify patches before publishing.
@@ -1141,10 +1170,20 @@ fn main() {
                 if load_settings().tray_on_close { api.prevent_close(); let _ = w.hide(); }
             }
         })
-        .invoke_handler(tauri::generate_handler![drives, scan_clean, clean, list_dir, move_candidates, plan_move, move_folder, moved_list, move_back, admin_task, open_in_explorer, find_links, adopt_link, get_settings, save_settings, last_scan, app_info, check_update, apply_update,
+        .invoke_handler(tauri::generate_handler![drives, scan_clean, clean, list_dir, move_candidates, plan_move, move_folder, moved_list, move_back, admin_task, open_in_explorer, find_links, adopt_link, get_settings, save_settings, check_schedule, last_scan, app_info, check_update, apply_update,
             tools::find_large, tools::find_dupes, tools::find_installers, tools::trash_files, tools::find_dev, tools::delete_dev, tools::reveal_file, tools::system_info, tools::system_task, tools::apps_list, tools::uninstall_app, tools::snapshot, tools::growth, tools::export_report, tools::install_state, tools::install_app, tools::uninstall_self,
             extra::disk_scan, extra::fast_dir, extra::disk_release, extra::onedrive_scan, extra::onedrive_free, extra::trash_log, extra::restore_trashed, extra::find_empty, extra::delete_empty, extra::find_shortcuts, extra::find_similar, extra::startup_list, extra::startup_set, extra::winsxs_analyze, extra::set_exclusions, extra::profile_dir, extra::hidden_space, extra::schedule_chkdsk,
-            more::cancel_scan, more::scan_progress, more::clean_history, more::save_csv, more::last_hidden, more::shell_menu_state, more::shell_menu_set, more::launch_path])
+            more::cancel_scan, more::scan_progress, more::clean_history, more::save_csv, more::last_hidden, more::shell_menu_state, more::shell_menu_set, more::launch_path, more::ai_models])
         .run(tauri::generate_context!())
         .expect("failed to start Lighten");
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    #[test]
+    fn the_task_program_is_read_from_its_xml() {
+        let x = r#"<Actions><Exec><Command>"C:\Users\a &amp; b\Lighten.exe"</Command><Arguments>--scan</Arguments></Exec></Actions>"#;
+        assert_eq!(super::task_program(x).as_deref(), Some(r"C:\Users\a & b\Lighten.exe"));
+        assert_eq!(super::task_program("ERROR: The system cannot find the file specified."), None);
+    }
 }

@@ -49,10 +49,20 @@ jobs:
       - name: Update manifest
         if: env.UPDATE_KEY != ''
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $key = Join-Path $env:RUNNER_TEMP 'update.key'
           [IO.File]::WriteAllText($key, $env:UPDATE_KEY.Trim())
-          try { .\scripts\make-latest.ps1 -Exe out\Lighten.exe -Version $env:VERSION -KeyFile $key -Out out\latest.json }
+          # the newest published release is what people are updating from; with none, only the full file is listed
+          $extra = @{}
+          $prev = gh release view --json tagName --jq .tagName 2>$null
+          if ($prev -and $prev -ne $env:GITHUB_REF_NAME) {
+            gh release download $prev --pattern Lighten.exe --dir prev
+            if ($LASTEXITCODE -eq 0) { $extra = @{ PreviousExe = 'prev\Lighten.exe'; PreviousVersion = $prev.TrimStart('v') } }
+          }
+          $global:LASTEXITCODE = 0 # having no previous program is fine; make-latest throws on real failures
+          try { .\scripts\make-latest.ps1 -Exe out\Lighten.exe -Version $env:VERSION -KeyFile $key -Out out\latest.json @extra }
           finally { Remove-Item $key -Force }
       - name: Create the draft release
         shell: pwsh

@@ -1,7 +1,7 @@
 //! NTFS fast scan, OneDrive, startup apps, extra finders, undo log, exclusions.
 //! Same rules as tools.rs: deletes only act on paths a finder just offered, never protected or excluded ones.
 use super::more::{log_action, note_hidden, Job};
-use super::tools::{hit, mtime, offer, offered, protected, root_ok, run_ps, tail, walk_files, DupGroup, FileHit};
+use super::tools::{hit, mtime, offer, offered, protected, root_ok, run_ps, run_ps_input, ps_quote, tail, walk_files, DupGroup, FileHit, READ_LINES};
 use super::*;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -121,15 +121,10 @@ pub async fn restore_trashed(paths: Vec<String>) -> Result<u64, String> {
         if ok.is_empty() {
             return Ok(0);
         }
-        let list = lighten_dir().join("restore-list.txt");
-        fs::write(&list, ok.join("\r\n")).map_err(|e| e.to_string())?;
         let script = format!(
-            "$want=@{{}}; Get-Content -LiteralPath '{}' -Encoding UTF8 | ForEach-Object {{ $want[$_.ToLower()]=1 }}\r\n$sh=New-Object -ComObject Shell.Application\r\nforeach($i in @($sh.NameSpace(10).Items())){{ $d=$i.ExtendedProperty('System.Recycle.DeletedFrom'); if(-not $d){{continue}}; $n=$i.Name; $e=[IO.Path]::GetExtension($i.Path); if($e -and -not $n.EndsWith($e,[StringComparison]::OrdinalIgnoreCase)){{$n+=$e}}; if($want.ContainsKey((Join-Path $d $n).ToLower())){{ $i.InvokeVerb('undelete') }} }}",
-            list.display()
+            "{READ_LINES}$want=@{{}}; $lines | ForEach-Object {{ $want[$_.ToLower()]=1 }}\r\n$sh=New-Object -ComObject Shell.Application\r\nforeach($i in @($sh.NameSpace(10).Items())){{ $d=$i.ExtendedProperty('System.Recycle.DeletedFrom'); if(-not $d){{continue}}; $n=$i.Name; $e=[IO.Path]::GetExtension($i.Path); if($e -and -not $n.EndsWith($e,[StringComparison]::OrdinalIgnoreCase)){{$n+=$e}}; if($want.ContainsKey((Join-Path $d $n).ToLower())){{ $i.InvokeVerb('undelete') }} }}"
         );
-        let r = run_ps(&script);
-        let _ = fs::remove_file(&list);
-        r?;
+        run_ps_input(&script, &ok.join("\r\n"))?;
         Ok(ok.iter().filter(|p| Path::new(p).exists()).count() as u64)
     })
     .await?
@@ -589,12 +584,9 @@ pub async fn onedrive_free(paths: Vec<String>) -> Result<Freed, String> {
         if ok.is_empty() {
             return Ok(Freed { freed: 0, done: 0, failed: failed0 });
         }
-        let list = lighten_dir().join("od-list.txt");
-        fs::write(&list, ok.iter().map(|(p, _)| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\r\n")).map_err(|e| e.to_string())?;
+        let list = ok.iter().map(|(p, _)| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\r\n");
         // attrib +U -P is exactly what "Free up space" in Explorer does; OneDrive refuses files not yet uploaded
-        let r = run_ps(&format!("Get-Content -LiteralPath '{}' -Encoding UTF8 | ForEach-Object {{ attrib.exe +U -P $_ | Out-Null }}", list.display()));
-        let _ = fs::remove_file(&list);
-        r?;
+        run_ps_input(&format!("{READ_LINES}$lines | ForEach-Object {{ attrib.exe +U -P $_ | Out-Null }}"), &list)?;
         let (mut freed, mut done) = (0, 0);
         for (p, len) in &ok {
             if fs::symlink_metadata(p).map(|m| m.file_attributes() & OD_RECALL != 0).unwrap_or(false) {
@@ -716,10 +708,8 @@ pub async fn find_shortcuts() -> Result<Vec<LnkHit>, String> {
         if found.is_empty() {
             return Ok(vec![]);
         }
-        let list = lighten_dir().join("lnk-list.txt");
-        fs::write(&list, found.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\r\n")).map_err(|e| e.to_string())?;
-        let out = run_ps(&format!("$sh=New-Object -ComObject WScript.Shell; Get-Content -LiteralPath '{}' -Encoding UTF8 | ForEach-Object {{ try {{ $t=$sh.CreateShortcut($_).TargetPath }} catch {{ $t='' }}; if($t){{ $t=[Environment]::ExpandEnvironmentVariables($t); \"$_`t$t\" }} }}", list.display()));
-        let _ = fs::remove_file(&list);
+        let list = found.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\r\n");
+        let out = run_ps_input(&format!("{READ_LINES}$sh=New-Object -ComObject WScript.Shell; $lines | ForEach-Object {{ try {{ $t=$sh.CreateShortcut($_).TargetPath }} catch {{ $t='' }}; if($t){{ $t=[Environment]::ExpandEnvironmentVariables($t); \"$_`t$t\" }} }}"), &list);
         let mut v = vec![];
         for line in out?.lines() {
             let Some((lnk, target)) = line.split_once('\t') else { continue };
@@ -875,10 +865,9 @@ pub async fn startup_set(id: String, enabled: bool) -> Result<(), String> {
         let it = startup_all().into_iter().find(|i| i.id == id).ok_or("That startup entry no longer exists")?;
         let key = approved_key(&it.scope, &it.kind).ok_or("Unknown startup location")?;
         let first = if enabled { 2 } else { 3 };
-        let esc = |s: &str| s.replace('\'', "''");
         let out = run_ps(&format!(
             "$p='{}'; if(-not (Test-Path $p)){{ New-Item -Path $p -Force | Out-Null }}; New-ItemProperty -Path $p -Name '{}' -PropertyType Binary -Value ([byte[]]({first},0,0,0,0,0,0,0,0,0,0,0)) -Force | Out-Null; 'ok'",
-            esc(&key), esc(&it.name)
+            ps_quote(&key), ps_quote(&it.name)
         ))?;
         if out.ends_with("ok") { Ok(()) } else { Err(tail(&out, 300)) }
     })
@@ -947,7 +936,7 @@ pub async fn hidden_space() -> Result<Vec<Hidden>, String> {
 pub async fn schedule_chkdsk(drive: String) -> Result<String, String> {
     blocking(move || -> Result<String, String> {
         let l = drive_letter(&drive).ok_or("Unknown drive")?;
-        let o = Command::new("cmd").args(["/c", &format!("echo Y| chkdsk {l}: /f")]).creation_flags(NO_WINDOW).output().map_err(|e| e.to_string())?;
+        let o = sys_cmd("cmd").args(["/c", &format!("echo Y| chkdsk {l}: /f")]).output().map_err(|e| e.to_string())?;
         let s = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
         Ok(tail(s.trim(), 400))
     })

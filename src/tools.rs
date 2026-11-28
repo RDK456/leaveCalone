@@ -1,5 +1,6 @@
 //! Finders, apps, system tasks, growth history, update signing, installer. Shares helpers with main.rs.
 use super::*;
+use super::launch::docker_exe;
 use super::more::{log_action, Job};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -32,22 +33,7 @@ pub(crate) fn protected(p: &Path) -> bool {
 pub(crate) fn mtime(md: &fs::Metadata) -> u64 {
     md.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0)
 }
-pub(crate) fn run_ps(script: &str) -> Result<String, String> {
-    let dir = lighten_dir();
-    let f = dir.join(format!("run-{}.ps1", now()));
-    fs::write(&f, format!("[Console]::OutputEncoding=[Text.Encoding]::UTF8\r\n{script}\r\n")).map_err(|e| e.to_string())?;
-    let o = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&f)
-        .creation_flags(NO_WINDOW)
-        .output()
-        .map_err(|e| e.to_string());
-    let _ = fs::remove_file(&f);
-    let o = o?;
-    let mut s = String::from_utf8_lossy(&o.stdout).to_string();
-    s.push_str(&String::from_utf8_lossy(&o.stderr));
-    Ok(s.trim().to_string())
-}
+pub(crate) use crate::launch::{ps_quote, run_ps, run_ps_input, READ_LINES};
 pub(crate) fn tail(s: &str, n: usize) -> String {
     let c: Vec<char> = s.chars().collect();
     c[c.len().saturating_sub(n)..].iter().collect()
@@ -195,16 +181,18 @@ pub async fn find_dupes(root: String, min_mb: u64) -> Result<Vec<DupGroup>, Stri
 }
 
 #[tauri::command]
-pub async fn find_installers(days: u64) -> Result<Vec<FileHit>, String> {
+pub async fn find_installers(app: AppHandle, days: u64) -> Result<Vec<FileHit>, String> {
+    use tauri::Manager;
+    let (downloads, desk, docs) = (app.path().download_dir(), super::more::desktop(&app), app.path().document_dir());
     let job = Job::start();
     blocking(move || -> Result<Vec<FileHit>, String> {
-        let prof = envp("USERPROFILE");
         let cutoff = now().saturating_sub(days * 86400);
         let all = ["iso", "msi", "exe", "msix", "appx", "msixbundle", "appxbundle", "cab"];
         let safe = ["iso", "msi", "msix", "appx", "msixbundle", "appxbundle"];
         let mut v = vec![];
-        for (dir, exts) in [("Downloads", &all[..]), ("Desktop", &safe[..]), ("Documents", &safe[..])] {
-            walk_files(&prof.join(dir), false, job, &mut |p, md| {
+        for (dir, exts) in [(downloads.ok(), &all[..]), (desk.ok(), &safe[..]), (docs.ok(), &safe[..])] {
+            let Some(dir) = dir else { continue };
+            walk_files(&dir, false, job, &mut |p, md| {
                 let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                 if exts.contains(&ext.as_str()) && mtime(md) <= cutoff {
                     v.push(hit(p, md));
@@ -212,6 +200,7 @@ pub async fn find_installers(days: u64) -> Result<Vec<FileHit>, String> {
             });
         }
         v.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        v.dedup_by(|a, b| a.path == b.path); // one folder can sit inside another
         job.check()?;
         offer(v.iter().map(|h| h.path.clone()));
         Ok(v)
@@ -250,14 +239,9 @@ pub async fn trash_files(paths: Vec<String>, permanent: bool) -> Result<TrashRes
                 }
             }
         } else if !ok.is_empty() {
-            let list = lighten_dir().join("trash-list.txt");
-            fs::write(&list, ok.iter().map(|(p, _)| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\r\n")).map_err(|e| e.to_string())?;
-            let script = format!(
-                "Add-Type -AssemblyName Microsoft.VisualBasic; Get-Content -LiteralPath '{}' -Encoding UTF8 | ForEach-Object {{ try {{ [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($_,'OnlyErrorDialogs','SendToRecycleBin'); 'ok' }} catch {{ 'fail' }} }}",
-                list.display()
-            );
-            let out = run_ps(&script)?;
-            let _ = fs::remove_file(&list);
+            let list = ok.iter().map(|(p, _)| p.to_string_lossy().to_string()).collect::<Vec<_>>().join("\r\n");
+            let script = format!("{READ_LINES}Add-Type -AssemblyName Microsoft.VisualBasic; $lines | ForEach-Object {{ try {{ [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($_,'OnlyErrorDialogs','SendToRecycleBin'); 'ok' }} catch {{ 'fail' }} }}");
+            let out = run_ps_input(&script, &list)?;
             let mut logged = vec![];
             for ((p, len), line) in ok.iter().zip(out.lines().map(|l| l.trim())) {
                 if line == "ok" && !p.exists() {
@@ -360,7 +344,7 @@ pub async fn delete_dev(paths: Vec<String>) -> Result<DelResult, String> {
             }
             let size = dir_size(&p, 0).bytes;
             if fs::remove_dir_all(&p).is_err() {
-                let _ = Command::new("cmd").args(["/C", "rmdir", "/s", "/q"]).arg(&p).creation_flags(NO_WINDOW).output();
+                let _ = sys_cmd("cmd").args(["/C", "rmdir", "/s", "/q"]).arg(&p).output();
             }
             if p.exists() { failed += 1 } else { freed += size; done += 1 }
         }
@@ -371,7 +355,7 @@ pub async fn delete_dev(paths: Vec<String>) -> Result<DelResult, String> {
 }
 #[tauri::command]
 pub fn reveal_file(path: String) {
-    let _ = Command::new("explorer").raw_arg(format!("/select,\"{path}\"")).spawn();
+    let _ = sys_cmd("explorer").raw_arg(format!("/select,\"{path}\"")).spawn();
 }
 
 // ---------- system ----------
@@ -421,7 +405,7 @@ pub async fn system_info() -> Result<SysInfo, String> {
         let windows_old = if wo.is_dir() { dir_size(wo, 0).bytes } else { 0 };
         let hiber = fs::metadata(r"C:\hiberfil.sys").map(|m| m.len()).unwrap_or(0);
         let pagefile = run_ps("Get-CimInstance Win32_PageFileUsage | ForEach-Object { \"$($_.Name)  allocated $($_.AllocatedBaseSize) MB, peak $($_.PeakUsage) MB\" }").unwrap_or_default().lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        let docker = Command::new("docker").args(["system", "df", "--format", "{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)"]).creation_flags(NO_WINDOW).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|s| s.to_string()).collect());
+        let docker = Command::new(docker_exe()).args(["system", "df", "--format", "{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)"]).creation_flags(NO_WINDOW).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|s| s.to_string()).collect());
         let vhdx = find_vhdx().into_iter().map(|p| Vhdx { bytes: fs::metadata(&p).map(|m| m.len()).unwrap_or(0), path: p.to_string_lossy().into() }).collect();
         let kernel_reports = dir_size(Path::new(r"C:\Windows\LiveKernelReports"), 0).bytes;
         // vssadmin lists one block per volume; take the "Used" line of the C: block
@@ -433,14 +417,15 @@ pub async fn system_info() -> Result<SysInfo, String> {
 #[tauri::command]
 pub async fn system_task(task: String, arg: Option<String>) -> Result<String, String> {
     blocking(move || -> Result<String, String> {
+        let mut input = String::new();
         let script = match task.as_str() {
             "winold" => r#"$p='C:\Windows.old'; if(-not (Test-Path $p)){ 'Nothing to remove'; exit }
 takeown /F $p /R /A /D Y | Out-Null; icacls $p /grant Administrators:F /T /C /Q | Out-Null
 cmd /c rd /s /q $p; if(Test-Path $p){ 'Partly removed. Some files were in use.' } else { 'Removed' }"#.to_string(),
             "hiber_off" => "powercfg /h off; 'Hibernation off (Fast Startup is off too)'".into(),
             "hiber_on" => "powercfg /h on; 'Hibernation on'".into(),
-            "docker_prune" => "docker system prune -f".into(),
-            "docker_prune_all" => "docker system prune -a -f".into(),
+            "docker_prune" => format!("& '{}' system prune -f", ps_quote(&docker_exe().to_string_lossy())),
+            "docker_prune_all" => format!("& '{}' system prune -a -f", ps_quote(&docker_exe().to_string_lossy())),
             "restore_point" => "Enable-ComputerRestore -Drive 'C:\\' -ErrorAction SilentlyContinue; try { Checkpoint-Computer -Description 'Lighten' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop; 'Restore point created' } catch { 'Not created: ' + $_.Exception.Message }".into(),
             "kernel_reports" => r#"$p='C:\Windows\LiveKernelReports'; $b=(Get-ChildItem $p -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
 Get-ChildItem $p -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
@@ -450,11 +435,12 @@ Get-ChildItem $p -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Fo
             "wsl_compact" => {
                 let a = arg.ok_or("Missing disk")?;
                 if !find_vhdx().iter().any(|p| lc(p) == lc(Path::new(&a))) { return Err("Not a known WSL or Docker disk".into()); }
-                format!("wsl --shutdown; Start-Sleep 3; $t=Join-Path $env:TEMP 'lighten-compact.txt'; \"select vdisk file=`\"{a}`\"`r`nattach vdisk readonly`r`ncompact vdisk`r`ndetach vdisk\" | Set-Content $t -Encoding ASCII; diskpart /s $t; Remove-Item $t")
+                input = a;
+                format!("{READ_LINES}wsl --shutdown; Start-Sleep 3; $d=$lines[0]; \"select vdisk file=`\"$d`\"`r`nattach vdisk readonly`r`ncompact vdisk`r`ndetach vdisk\" | diskpart")
             }
             _ => return Err("Unknown task".into()),
         };
-        Ok(tail(&run_ps(&script)?, 800))
+        Ok(tail(&run_ps_input(&script, &input)?, 800))
     })
     .await?
 }
@@ -469,17 +455,19 @@ struct RawApp {
     est: u64,
     installed: String,
     uninstall: String,
+    /// registered under HKCU, which any program can write without administrator rights
+    per_user: bool,
 }
 fn read_apps() -> Vec<RawApp> {
     let script = r#"$k='HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*','HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-@(Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and $_.UninstallString -and -not $_.SystemComponent } | Select-Object PSChildName,DisplayName,DisplayVersion,Publisher,InstallLocation,EstimatedSize,InstallDate,UninstallString) | ConvertTo-Json -Compress"#;
+@(Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and $_.UninstallString -and -not $_.SystemComponent } | Select-Object PSChildName,DisplayName,DisplayVersion,Publisher,InstallLocation,EstimatedSize,InstallDate,UninstallString,@{n='PerUser';e={$_.PSPath -like '*HKEY_CURRENT_USER*'}}) | ConvertTo-Json -Compress"#;
     let Ok(out) = run_ps(script) else { return vec![] };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) else { return vec![] };
     let arr = match v { serde_json::Value::Array(a) => a, o @ serde_json::Value::Object(_) => vec![o], _ => vec![] };
     let s = |x: &serde_json::Value, k: &str| x.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let mut seen = HashSet::new();
     arr.iter()
-        .map(|x| RawApp { id: format!("{}|{}", s(x, "PSChildName"), s(x, "DisplayName")), name: s(x, "DisplayName"), version: s(x, "DisplayVersion"), publisher: s(x, "Publisher"), location: s(x, "InstallLocation").trim_matches('"').trim_end_matches('\\').to_string(), est: x.get("EstimatedSize").and_then(|v| v.as_u64()).unwrap_or(0) * 1024, installed: s(x, "InstallDate"), uninstall: s(x, "UninstallString") })
+        .map(|x| RawApp { id: format!("{}|{}", s(x, "PSChildName"), s(x, "DisplayName")), name: s(x, "DisplayName"), version: s(x, "DisplayVersion"), publisher: s(x, "Publisher"), location: s(x, "InstallLocation").trim_matches('"').trim_end_matches('\\').to_string(), est: x.get("EstimatedSize").and_then(|v| v.as_u64()).unwrap_or(0) * 1024, installed: s(x, "InstallDate"), uninstall: s(x, "UninstallString"), per_user: x.get("PerUser").and_then(|v| v.as_bool()).unwrap_or(true) })
         .filter(|a| seen.insert(a.id.clone()))
         .collect()
 }
@@ -494,6 +482,8 @@ pub struct AppRow {
     installed: String,
     last_used: Option<u64>,
     movable: bool,
+    per_user: bool,
+    uninstall: String,
 }
 #[tauri::command]
 pub async fn apps_list() -> Result<Vec<AppRow>, String> {
@@ -533,23 +523,29 @@ pub async fn apps_list() -> Result<Vec<AppRow>, String> {
             }
             let under_pf = pfs.iter().any(|b| strip_ci(&loc, b).map(|r| r.components().count() == 1).unwrap_or(false));
             let movable = ok && !denied(&loc) && (under_pf || strip_ci(&loc, &prof).is_some());
-            AppRow { id: a.id, name: a.name, version: a.version, publisher: a.publisher, location: a.location, bytes, installed: a.installed, last_used: last, movable }
+            AppRow { id: a.id, name: a.name, version: a.version, publisher: a.publisher, location: a.location, bytes, installed: a.installed, last_used: last, movable, per_user: a.per_user, uninstall: a.uninstall }
         }).collect()
     })
     .await
 }
 #[tauri::command]
-pub async fn uninstall_app(id: String) -> Result<(), String> {
-    blocking(move || -> Result<(), String> {
+/// Returns true when Windows' own Installed apps page was opened instead of the uninstaller.
+pub async fn uninstall_app(id: String) -> Result<bool, String> {
+    blocking(move || -> Result<bool, String> {
         let a = read_apps().into_iter().find(|a| a.id == id).ok_or("App not found")?;
-        Command::new("cmd").raw_arg(format!("/C \"{}\"", a.uninstall)).spawn().map_err(|e| e.to_string())?;
-        Ok(())
+        if a.per_user {
+            // the shell is not elevated, so whatever it starts is not either
+            sys_cmd("explorer").arg("ms-settings:appsfeatures").spawn().map_err(|e| e.to_string())?;
+            return Ok(true);
+        }
+        sys_cmd("cmd").raw_arg(format!("/C \"{}\"", a.uninstall)).spawn().map_err(|e| e.to_string())?;
+        Ok(false)
     })
     .await?
 }
 /// Services running from inside `folder`: moving the folder under them is unsafe.
 pub fn services_in(folder: &Path) -> Vec<String> {
-    let f = folder.to_string_lossy().to_lowercase().replace('\'', "''");
+    let f = ps_quote(&folder.to_string_lossy().to_lowercase());
     run_ps(&format!("$f='{f}'; Get-CimInstance Win32_Service | Where-Object {{ $_.State -eq 'Running' -and $_.PathName -and $_.PathName.ToLower().Contains($f) }} | ForEach-Object {{ $_.Name }}"))
         .unwrap_or_default().lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
 }
@@ -688,7 +684,7 @@ pub async fn export_report(app: AppHandle) -> Result<String, String> {
 
 // ---------- toast ----------
 pub fn toast(title: &str, text: &str) {
-    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('\'', "''");
+    let esc = |s: &str| ps_quote(&s.replace('&', "&amp;").replace('<', "&lt;"));
     let script = format!(
         "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null; $x = New-Object Windows.Data.Xml.Dom.XmlDocument; $x.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>'); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($x))",
         esc(title), esc(text)
@@ -749,10 +745,10 @@ fn install_dir() -> PathBuf {
 #[tauri::command]
 pub fn install_state() -> serde_json::Value {
     let exe = std::env::current_exe().unwrap_or_default();
-    serde_json::json!({ "installed": lc(&exe).starts_with(&lc(&install_dir())), "signing": signing_on() })
+    serde_json::json!({ "installed": lc(&exe).starts_with(&lc(&install_dir())), "schedulable": super::launch::in_program_files(&exe), "signing": signing_on() })
 }
 fn q(p: &Path) -> String {
-    p.to_string_lossy().replace('\'', "''")
+    ps_quote(&p.to_string_lossy())
 }
 #[tauri::command]
 pub async fn install_app(app: AppHandle) -> Result<(), String> {
