@@ -73,6 +73,12 @@ pub fn ps_command(script: &str) -> Command {
         .arg(format!("{PRELUDE}{script}"));
     c
 }
+/// For work that must happen after Lighten quits, such as swapping in an update.
+/// The restarted program inherits this environment, so it gets the normal PATH back.
+pub fn spawn_after_exit(script: &str) -> std::io::Result<std::process::Child> {
+    // never add DETACHED_PROCESS (0x8) here: PowerShell then exits 0 without running the script
+    ps_command(script).env("PATH", std::env::var_os("PATH").unwrap_or_default()).spawn()
+}
 pub fn run_ps(script: &str) -> Result<String, String> {
     run_ps_input(script, "")
 }
@@ -136,6 +142,16 @@ mod tests {
         for src in [include_str!("main.rs"), include_str!("tools.rs"), include_str!("extra.rs"), include_str!("more.rs"), include_str!("launch.rs")] {
             assert!(!src.contains(bare));
         }
+    }
+    /// The update swap is started this way. "Ran and exited 0" is not enough: with the wrong launch flags
+    /// PowerShell does exactly that without running a line.
+    #[test]
+    fn a_script_left_running_really_runs() {
+        let mark = std::env::temp_dir().join(format!("lighten-after-exit-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&mark);
+        spawn_after_exit(&format!("Set-Content -LiteralPath '{}' -Value ran", ps_quote(&mark.to_string_lossy()))).unwrap().wait().unwrap();
+        assert!(mark.exists());
+        let _ = std::fs::remove_file(&mark);
     }
     #[test]
     fn only_program_files_counts_as_installed() {

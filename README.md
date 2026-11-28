@@ -167,7 +167,9 @@ lighten.exe --sign key.txt 0.0.2 <sha256> sig.txt
 
 ## Status
 
-v0.1.3, early. Tested: scanning, delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, and the UI. Real deletes, restore points, install and updater restart need more testing on varied machines. Back up what matters and use the dry-run report first.
+v0.1.3, early. Tested: scanning, cleaning (on test files), delta patching, signing, the NTFS table parser, the empty-folder, exclusion and photo-matching logic, the right-click entry and the UI. Fast scan, restore points, install and administrator-only cleaning need more testing on varied machines.
+
+**Known issue:** in v0.1.3 and earlier, **Update** in the app closes Lighten without finishing. Download the new `Lighten.exe` from [Releases](https://github.com/RDK456/leaveCalone/releases/latest) instead. Back up what matters and use the dry-run report first.
 
 ## License
 

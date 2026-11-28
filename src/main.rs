@@ -9,7 +9,7 @@ mod tools;
 mod launch;
 use launch::{ps_command, sys_cmd};
 use serde::{Deserialize, Serialize};
-use std::os::windows::{fs::MetadataExt, process::CommandExt};
+use std::os::windows::fs::MetadataExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -1097,8 +1097,7 @@ async fn apply_update(app: AppHandle) -> Result<(), String> {
             "Copy-Item -LiteralPath '{e}' -Destination '{b}' -Force; for($i=0;$i -lt 30;$i++){{ try{{ Move-Item -LiteralPath '{n}' -Destination '{e}' -Force -ErrorAction Stop; break }}catch{{ Start-Sleep 1 }} }}; Start-Process -FilePath '{e}'",
             e = q(&exe), b = q(&bak), n = q(&new)
         );
-        // the new program inherits this environment, so give it the normal PATH back
-        ps_command(&script).env("PATH", std::env::var_os("PATH").unwrap_or_default()).creation_flags(NO_WINDOW | 0x8).spawn().map_err(|e| e.to_string())?;
+        launch::spawn_after_exit(&script).map_err(|e| e.to_string())?;
         app.exit(0);
         Ok(())
     })
